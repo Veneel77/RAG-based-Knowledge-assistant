@@ -15,8 +15,7 @@ HF_TOKEN = os.getenv("HF_TOKEN")
 # from llama_cpp import Llama  # if using llama-cpp-python
 os.environ["STREAMLIT_HOME"] = os.path.join(os.getcwd(), ".streamlit")
 os.makedirs(os.environ["STREAMLIT_HOME"], exist_ok=True)
-import streamlit as st
-HF_TOKEN = st.secrets["HF_TOKEN"]
+
 
 
 # ----------------------------
