@@ -16,9 +16,13 @@ A Retrieval-Augmented Generation (RAG) chatbot that answers questions from custo
 
 ## Setup
 ```bash
-pip install -r requirements.txt
-python ingest_index.py docs/AI1.pdf docs/aiimpact.pdf
-streamlit run app.py
+-pip install -r requirements.txt
+-python ingest_index.py docs/AI1.pdf docs/aiimpact.pdf
+-streamlit run app.py
+
+
+## 🌐 Live Demo
+👉 [Streamlit App Link](https://rag-based-knowledge-assistant-eue8vzfyy3crv9voqhqlst.streamlit.app/)  
 
 ## Future Work
 
@@ -27,4 +31,3 @@ Integrate open/free LLMs (GPT4All / Llama.cpp)
 Enable cloud APIs (Hugging Face Inference / OpenAI) for better text generation
 
 Add evaluation metrics (precision/recall on retrieval)
-
