@@ -1,31 +1,28 @@
+# ingest_index.py
 import os, pickle
+from pypdf import PdfReader
+from sentence_transformers import SentenceTransformer
 import numpy as np
 import faiss
 from tqdm import tqdm
-from sentence_transformers import SentenceTransformer
-import pdfplumber   # more reliable than pypdf
 
+# Config
 EMBED_MODEL = "all-MiniLM-L6-v2"
-CHUNK_SIZE = 1000
-CHUNK_OVERLAP = 200
+CHUNK_SIZE = 400
+CHUNK_OVERLAP = 100
+BATCH_SIZE = 16
 
 def pdf_to_pages(pdf_path):
+    reader = PdfReader(pdf_path)
     pages = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for i, page in enumerate(pdf.pages):
-            text = page.extract_text() or ""
-            if text.strip():
-                pages.append({
-                    "doc_id": os.path.basename(pdf_path),
-                    "page": i+1,
-                    "text": text
-                })
+    for i, page in enumerate(reader.pages):
+        text = page.extract_text() or ""
+        if text.strip():
+            pages.append({"doc_id": os.path.basename(pdf_path), "page": i+1, "text": text})
     return pages
 
 def chunk_text(text, size=CHUNK_SIZE, overlap=CHUNK_OVERLAP):
-    chunks = []
-    start = 0
-    L = len(text)
+    chunks, start, L = [], 0, len(text)
     while start < L:
         end = min(start + size, L)
         chunk = text[start:end].strip()
@@ -38,39 +35,30 @@ def chunk_text(text, size=CHUNK_SIZE, overlap=CHUNK_OVERLAP):
 
 def build_index(pdf_paths, out_index="faiss.index", out_meta="meta.pkl"):
     model = SentenceTransformer(EMBED_MODEL)
+    dim = model.get_sentence_embedding_dimension()
+    index = faiss.IndexFlatIP(dim)
     metadatas = []
 
     for pdf in pdf_paths:
+        print(f"\n📄 Processing {pdf}...")
         pages = pdf_to_pages(pdf)
-        for p in pages:
+        for p in tqdm(pages, desc=f"Pages in {pdf}"):
             chunks = chunk_text(p["text"])
-            for c in chunks:
-                metadatas.append({"doc_id": p["doc_id"], "page": p["page"], "text": c})
+            for i in range(0, len(chunks), BATCH_SIZE):
+                batch = chunks[i:i+BATCH_SIZE]
+                embeddings = model.encode(batch, convert_to_numpy=True)
+                # normalize for cosine similarity
+                norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+                embeddings = embeddings / np.where(norms==0, 1, norms)
+                index.add(embeddings)
+                for c in batch:
+                    metadatas.append({"doc_id": p["doc_id"], "page": p["page"], "text": c})
 
-    texts = [m["text"] for m in metadatas if m["text"].strip()]
-    if not texts:
-        print("❌ No text extracted from the PDFs. Try another extractor or check if PDF is image-based.")
-        return
-
-    print("Encoding", len(texts), "chunks...")
-    embeddings = model.encode(texts, show_progress_bar=True, convert_to_numpy=True)
-
-    # Normalize embeddings
-    if embeddings.ndim == 1:   # avoid crash if single embedding
-        embeddings = embeddings.reshape(1, -1)
-    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-    norms[norms == 0] = 1
-    embeddings = embeddings / norms
-
-    dim = embeddings.shape[1]
-    index = faiss.IndexFlatIP(dim)
-    index.add(embeddings)
-
+    # Save index + metadata
     faiss.write_index(index, out_index)
     with open(out_meta, "wb") as f:
         pickle.dump(metadatas, f)
-
-    print(f"✅ Saved index to {out_index}, metadata to {out_meta}")
+    print(f"\n✅ Index built and saved to {out_index}, metadata to {out_meta}")
 
 if __name__ == "__main__":
     import sys
