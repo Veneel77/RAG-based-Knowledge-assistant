@@ -13,6 +13,16 @@ A Retrieval-Augmented Generation (RAG) chatbot that answers questions from custo
 - **Vector DB:** FAISS  
 - **Framework:** Streamlit  
 - **Deployment:** Streamlit Cloud (free hosting)
+## Future Work
+
+Integrate open/free LLMs (GPT4All / Llama.cpp)
+
+Enable cloud APIs (Hugging Face Inference / OpenAI) for better text generation
+
+Add evaluation metrics (precision/recall on retrieval)
+
+## 🌐 Live Demo
+👉 [Streamlit App Link](https://rag-based-knowledge-assistant-eue8vzfyy3crv9voqhqlst.streamlit.app/)
 
 ## Setup
 ```bash
@@ -21,13 +31,6 @@ A Retrieval-Augmented Generation (RAG) chatbot that answers questions from custo
 -streamlit run app.py
 
 
-## 🌐 Live Demo
-👉 [Streamlit App Link](https://rag-based-knowledge-assistant-eue8vzfyy3crv9voqhqlst.streamlit.app/)  
 
-## Future Work
 
-Integrate open/free LLMs (GPT4All / Llama.cpp)
 
-Enable cloud APIs (Hugging Face Inference / OpenAI) for better text generation
-
-Add evaluation metrics (precision/recall on retrieval)
