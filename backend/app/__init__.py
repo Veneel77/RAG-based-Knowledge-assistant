@@ -1,0 +1,2 @@
+"""RAG Knowledge Assistant Backend"""
+
