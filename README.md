@@ -530,10 +530,27 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
+## 📄 Additional Documentation
+
+- **[DEPLOYMENT_PROOF.md](DEPLOYMENT_PROOF.md)** - Complete proof of working deployment with test results
+- **[WORKING_CONFIGURATION.md](WORKING_CONFIGURATION.md)** - Verified working configuration and setup guide
+
+---
+
+## ✅ Verified Working
+
+**Status**: 🟢 **PRODUCTION READY**  
+**Last Verified**: December 18, 2025  
+**Gemini Model**: `gemini-2.5-flash` (Latest stable)
+
+This project has been fully tested and verified working. See [DEPLOYMENT_PROOF.md](DEPLOYMENT_PROOF.md) for complete test results.
+
+---
+
 ## 📧 Contact & Support
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/RAG-based-Knowledge-assistant/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/RAG-based-Knowledge-assistant/discussions)
+- **Issues**: [GitHub Issues](https://github.com/Veneel77/RAG-based-Knowledge-assistant/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/Veneel77/RAG-based-Knowledge-assistant/discussions)
 
 ---
 
