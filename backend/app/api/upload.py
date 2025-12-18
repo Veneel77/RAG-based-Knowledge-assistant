@@ -148,13 +148,14 @@ async def upload_document(
             logger.info(f"Generating embeddings for {len(chunks)} chunks")
             embeddings = embedder.embed_texts(chunks)
             
-            # Prepare metadata for vector store
+            # Prepare metadata for vector store with user_id for filtering
             metadata_list = [
                 {
                     'content': chunk_text,
                     'document_id': document.id,
+                    'document_name': file.filename,  # Add document name for better tracking
                     'chunk_index': idx,
-                    'user_id': current_user.id
+                    'user_id': current_user.id  # CRITICAL: Store user_id in metadata
                 }
                 for idx, chunk_text in enumerate(chunks)
             ]

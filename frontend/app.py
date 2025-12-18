@@ -358,17 +358,23 @@ def render_main_app():
         
         if st.session_state.documents:
             for doc in st.session_state.documents:
-                with st.expander(f"📄 {doc['filename'][:30]}..."):
+                with st.expander(f"📄 {doc['filename']}"):
                     st.write(f"**Type:** {doc['file_type']}")
                     st.write(f"**Size:** {doc['file_size'] / 1024:.1f} KB")
                     st.write(f"**Chunks:** {doc['chunk_count']}")
                     st.write(f"**Uploaded:** {doc['uploaded_at'][:10]}")
+                    st.write(f"**Document ID:** {doc['id']}")
                     
-                    if st.button(f"Delete", key=f"delete_{doc['id']}"):
-                        if delete_document(doc['id']):
-                            st.success("Document deleted")
-                            st.session_state.documents = get_documents()
-                            st.rerun()
+                    if st.button(f"🗑️ Delete this document", key=f"delete_{doc['id']}", type="secondary"):
+                        with st.spinner("Deleting document and removing from vector store..."):
+                            if delete_document(doc['id']):
+                                st.success(f"✅ Deleted: {doc['filename']}")
+                                st.session_state.documents = get_documents()
+                                # Clear chat history since document context has changed
+                                st.session_state.chat_history = []
+                                st.rerun()
+                            else:
+                                st.error("❌ Failed to delete document")
         else:
             st.info("No documents uploaded yet")
     

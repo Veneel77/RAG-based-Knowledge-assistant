@@ -82,14 +82,27 @@ async def query_documents(
         k = request.k or settings.TOP_K_RESULTS
         retrieved_chunks = retriever.retrieve(request.query, k=k)
         
-        if not retrieved_chunks:
-            logger.warning("No relevant chunks found")
-            response_text = "I couldn't find any relevant information in the uploaded documents to answer your question. Please make sure you've uploaded relevant documents."
+        # CRITICAL FIX: Filter chunks by current user's documents only
+        user_document_ids = [doc.id for doc in db.query(Document).filter(
+            Document.user_id == current_user.id
+        ).all()]
+        
+        # Filter retrieved chunks to only include current user's documents
+        user_chunks = [
+            chunk for chunk in retrieved_chunks 
+            if chunk.get('document_id') in user_document_ids
+        ]
+        
+        logger.info(f"Retrieved {len(retrieved_chunks)} total chunks, {len(user_chunks)} belong to user")
+        
+        if not user_chunks:
+            logger.warning("No relevant chunks found for user's documents")
+            response_text = "I couldn't find any relevant information in YOUR uploaded documents to answer your question. Please make sure you've uploaded relevant documents."
             sources = []
         else:
-            # Get context from retrieved chunks
+            # Get context from retrieved chunks (user's documents only)
             context_parts = []
-            for idx, chunk in enumerate(retrieved_chunks, 1):
+            for idx, chunk in enumerate(user_chunks, 1):
                 context_parts.append(f"[Source {idx}]\n{chunk['content']}\n")
             context = "\n".join(context_parts)
             
@@ -110,11 +123,12 @@ async def query_documents(
                 conversation_history=conversation_history
             )
             
-            # Prepare sources
+            # Prepare sources (from user's documents only)
             sources = []
-            for chunk in retrieved_chunks:
+            for chunk in user_chunks:
                 document = db.query(Document).filter(
-                    Document.id == chunk['document_id']
+                    Document.id == chunk['document_id'],
+                    Document.user_id == current_user.id  # Extra safety check
                 ).first()
                 
                 if document:
