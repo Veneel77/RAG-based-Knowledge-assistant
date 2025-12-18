@@ -75,7 +75,7 @@ class Generator:
         conversation_history: Optional[List[Dict[str, str]]] = None
     ) -> str:
         """
-        Build prompt for Gemini API
+        Build enhanced prompt for Gemini API with deep analysis capabilities
         
         Args:
             query: User query
@@ -86,46 +86,77 @@ class Generator:
             Formatted prompt
         """
         prompt_parts = [
-            "You are a helpful AI assistant that answers questions based on the provided context.",
-            "Your task is to provide accurate, concise, and helpful answers based solely on the information given.",
+            "You are an EXPERT AI research assistant with deep analytical capabilities.",
+            "Your role is to provide comprehensive, insightful, and intellectually rigorous answers.",
             "",
-            "Guidelines:",
-            "- Answer based ONLY on the provided context",
-            "- If the context doesn't contain enough information, say so honestly",
-            "- Cite sources when possible by referencing [Source X]",
-            "- Be concise but thorough",
-            "- Use a professional and friendly tone",
+            "CORE CAPABILITIES:",
+            "1. Deep Analysis: Extract key insights, patterns, and relationships from the context",
+            "2. Critical Thinking: Identify implications, limitations, and future directions",
+            "3. Synthesis: Connect ideas across different parts of the document",
+            "4. Expertise: Explain complex concepts clearly while maintaining depth",
+            "5. Practical Application: Suggest real-world applications and use cases",
+            "",
+            "ANSWER GUIDELINES:",
+            "✓ Provide COMPREHENSIVE answers with multiple perspectives",
+            "✓ Include KEY INSIGHTS beyond just facts - explain WHY and HOW",
+            "✓ Cite specific sources [Source X] to support each claim",
+            "✓ Identify IMPORTANT PATTERNS, TRENDS, or RELATIONSHIPS in the data",
+            "✓ Suggest PRACTICAL APPLICATIONS or next steps when relevant",
+            "✓ Point out LIMITATIONS or gaps in the provided information",
+            "✓ Be INTELLECTUALLY CURIOUS - go beyond surface-level answers",
+            "✓ Use STRUCTURED formatting (bullet points, sections) for clarity",
+            "",
+            "AVOID:",
+            "✗ Generic or superficial answers",
+            "✗ Ignoring important details in the context",
+            "✗ Making claims without citing sources",
+            "✗ Being overly brief when depth is needed",
             "",
         ]
         
         # Add conversation history if available
         if conversation_history:
-            prompt_parts.append("Previous conversation:")
+            prompt_parts.append("=== CONVERSATION HISTORY ===")
             for entry in conversation_history[-3:]:  # Last 3 exchanges
                 prompt_parts.append(f"User: {entry.get('query', '')}")
-                prompt_parts.append(f"Assistant: {entry.get('response', '')}")
+                prompt_parts.append(f"Assistant: {entry.get('response', '')[:200]}...")
             prompt_parts.append("")
         
-        # Add context
+        # Add context with emphasis on depth
         if context:
             prompt_parts.extend([
-                "Context from documents:",
-                "---",
+                "=== RETRIEVED CONTEXT FROM DOCUMENTS ===",
+                "",
                 context,
-                "---",
+                "",
+                "=== END OF CONTEXT ===",
                 ""
             ])
         else:
             prompt_parts.extend([
-                "Note: No relevant context was found in the documents.",
+                "⚠️ NOTE: No relevant context was found in the uploaded documents.",
+                "Provide a thoughtful response based on general knowledge, but mention this limitation.",
                 ""
             ])
         
-        # Add current query
+        # Add current query with enhanced instructions
         prompt_parts.extend([
-            f"User Question: {query}",
+            "=== USER QUESTION ===",
+            f"{query}",
             "",
-            "Please provide a helpful answer based on the context above:"
+            "=== YOUR TASK ===",
+            "Provide a COMPREHENSIVE, INSIGHTFUL answer that:",
+            "1. Directly answers the question with depth and clarity",
+            "2. Extracts and explains KEY INSIGHTS from the context",
+            "3. Identifies PATTERNS, RELATIONSHIPS, or TRENDS",
+            "4. Discusses IMPLICATIONS and PRACTICAL APPLICATIONS",
+            "5. Cites sources [Source X] for each major point",
+            "6. Suggests FURTHER CONSIDERATIONS or next steps",
+            "7. Points out any LIMITATIONS in the available information",
+            "",
+            "Remember: Go DEEP, not just surface-level. The user wants REAL INSIGHTS and VALUE.",
+            "",
+            "BEGIN YOUR COMPREHENSIVE ANSWER:"
         ])
         
         return "\n".join(prompt_parts)

@@ -52,14 +52,24 @@ class TextChunker:
             end = start + self.chunk_size
             chunk = text[start:end]
             
-            # Try to break at sentence boundary if not at the end
+            # Try to break at sentence/paragraph boundary for better context
             if end < text_length:
-                # Look for sentence endings
-                last_period = chunk.rfind('.')
+                # Look for best breaking points (prioritize paragraphs, then sentences)
+                last_double_newline = chunk.rfind('\n\n')  # Paragraph break
+                last_period = chunk.rfind('. ')  # Sentence with space after
                 last_newline = chunk.rfind('\n')
-                last_break = max(last_period, last_newline)
                 
-                if last_break > self.chunk_size * 0.5:  # Only break if we're past 50% of chunk
+                # Choose the best break point
+                if last_double_newline > self.chunk_size * 0.4:
+                    last_break = last_double_newline
+                elif last_period > self.chunk_size * 0.4:
+                    last_break = last_period + 1  # Include the period
+                elif last_newline > self.chunk_size * 0.4:
+                    last_break = last_newline
+                else:
+                    last_break = -1
+                
+                if last_break > 0:
                     chunk = chunk[:last_break + 1]
                     end = start + last_break + 1
             

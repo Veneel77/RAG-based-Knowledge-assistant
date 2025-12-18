@@ -38,10 +38,10 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
     VECTOR_DIMENSION: int = 384
     
-    # RAG Settings
-    CHUNK_SIZE: int = 500
-    CHUNK_OVERLAP: int = 50
-    TOP_K_RESULTS: int = 5
+    # RAG Settings (Optimized for academic papers and detailed documents)
+    CHUNK_SIZE: int = 1000  # Increased for better context (was 500)
+    CHUNK_OVERLAP: int = 200  # More overlap for continuity (was 50)
+    TOP_K_RESULTS: int = 10  # More sources for comprehensive answers (was 5)
     
     # File Upload
     UPLOAD_DIR: str = "./uploads"

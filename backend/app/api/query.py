@@ -78,8 +78,12 @@ async def query_documents(
         # Create a fresh retriever to ensure we have the latest index
         retriever = Retriever(reload_index=True)
         
-        # Retrieve relevant chunks
+        # Retrieve MORE chunks for comprehensive answers (increased from 5 to 10+)
         k = request.k or settings.TOP_K_RESULTS
+        # For complex queries, get even more context
+        if len(request.query.split()) > 10 or '?' in request.query:
+            k = min(k * 2, 15)  # Double for complex questions, max 15
+        
         retrieved_chunks = retriever.retrieve(request.query, k=k)
         
         # CRITICAL FIX: Filter chunks by current user's documents only
