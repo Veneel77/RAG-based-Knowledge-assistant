@@ -20,8 +20,8 @@ settings = get_settings()
 logger = setup_logger(__name__)
 router = APIRouter(prefix="/query", tags=["query"])
 
-# Initialize RAG components
-retriever = Retriever()
+# Initialize RAG components (will be created per request)
+# retriever = Retriever()
 generator = Generator()
 
 
@@ -75,6 +75,9 @@ async def query_documents(
         
         logger.info(f"Processing query from user {current_user.username}: {request.query[:100]}")
         
+        # Create a fresh retriever to ensure we have the latest index
+        retriever = Retriever(reload_index=True)
+        
         # Retrieve relevant chunks
         k = request.k or settings.TOP_K_RESULTS
         retrieved_chunks = retriever.retrieve(request.query, k=k)
@@ -84,8 +87,11 @@ async def query_documents(
             response_text = "I couldn't find any relevant information in the uploaded documents to answer your question. Please make sure you've uploaded relevant documents."
             sources = []
         else:
-            # Get context
-            context = retriever.get_context(request.query, k=k)
+            # Get context from retrieved chunks
+            context_parts = []
+            for idx, chunk in enumerate(retrieved_chunks, 1):
+                context_parts.append(f"[Source {idx}]\n{chunk['content']}\n")
+            context = "\n".join(context_parts)
             
             # Get conversation history (last 3 exchanges)
             history = db.query(QueryHistory).filter(
@@ -160,11 +166,14 @@ async def health_check():
         # Check if Gemini API is accessible
         is_healthy = generator.check_api_key()
         
+        # Create retriever to check vector store
+        temp_retriever = Retriever(reload_index=True)
+        
         return {
             "status": "healthy" if is_healthy else "degraded",
             "gemini_api": "connected" if is_healthy else "error",
             "retriever": "ready",
-            "vector_store_size": retriever.vector_store.index.ntotal
+            "vector_store_size": temp_retriever.vector_store.index.ntotal
         }
     except Exception as e:
         return {

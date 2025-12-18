@@ -15,11 +15,23 @@ logger = setup_logger(__name__)
 class Retriever:
     """Retrieve relevant document chunks for a query"""
     
-    def __init__(self):
-        """Initialize retriever with embedder and vector store"""
+    def __init__(self, reload_index: bool = True):
+        """
+        Initialize retriever with embedder and vector store
+        
+        Args:
+            reload_index: Whether to reload the index from disk (default: True)
+        """
         logger.info("Initializing Retriever")
         self.embedder = Embedder()
         self.vector_store = VectorStore(dimension=self.embedder.dimension)
+        
+        # Reload the index from disk to get latest uploads
+        if reload_index and self.vector_store.index.ntotal == 0:
+            logger.info("Reloading vector store from disk")
+            self.vector_store.load()
+            logger.info(f"Loaded vector store with {self.vector_store.index.ntotal} vectors")
+        
         logger.info("Retriever initialized successfully")
     
     def retrieve(self, query: str, k: int = None) -> List[Dict]:

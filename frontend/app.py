@@ -19,9 +19,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
+# Custom CSS with dark mode support
 st.markdown("""
 <style>
+    /* Light mode colors */
     .main-header {
         font-size: 2.5rem;
         font-weight: bold;
@@ -39,6 +40,7 @@ st.markdown("""
         margin-bottom: 1rem;
         display: flex;
         flex-direction: column;
+        color: #000000;
     }
     .user-message {
         background-color: #e3f2fd;
@@ -55,18 +57,85 @@ st.markdown("""
         border-left: 3px solid #ffa726;
         margin-top: 0.5rem;
         font-size: 0.9rem;
+        color: #000000;
     }
     .success-box {
         background-color: #e8f5e9;
         padding: 1rem;
         border-radius: 0.5rem;
         border-left: 4px solid #4caf50;
+        color: #000000;
     }
     .error-box {
         background-color: #ffebee;
         padding: 1rem;
         border-radius: 0.5rem;
         border-left: 4px solid #f44336;
+        color: #000000;
+    }
+    
+    /* Dark mode support */
+    @media (prefers-color-scheme: dark) {
+        .main-header {
+            color: #64b5f6;
+        }
+        .sub-header {
+            color: #aaa;
+        }
+        .chat-message {
+            color: #ffffff;
+        }
+        .user-message {
+            background-color: #1e3a5f;
+            color: #ffffff;
+        }
+        .assistant-message {
+            background-color: #2a2a2a;
+            color: #ffffff;
+        }
+        .source-box {
+            background-color: #3a3520;
+            color: #ffffff;
+        }
+        .success-box {
+            background-color: #1b3a1f;
+            color: #ffffff;
+        }
+        .error-box {
+            background-color: #3a1f1f;
+            color: #ffffff;
+        }
+    }
+    
+    /* Force dark mode styles for Streamlit dark theme */
+    [data-testid="stAppViewContainer"][data-theme="dark"] .main-header {
+        color: #64b5f6 !important;
+    }
+    [data-testid="stAppViewContainer"][data-theme="dark"] .sub-header {
+        color: #aaa !important;
+    }
+    [data-testid="stAppViewContainer"][data-theme="dark"] .chat-message {
+        color: #ffffff !important;
+    }
+    [data-testid="stAppViewContainer"][data-theme="dark"] .user-message {
+        background-color: #1e3a5f !important;
+        color: #ffffff !important;
+    }
+    [data-testid="stAppViewContainer"][data-theme="dark"] .assistant-message {
+        background-color: #2a2a2a !important;
+        color: #ffffff !important;
+    }
+    [data-testid="stAppViewContainer"][data-theme="dark"] .source-box {
+        background-color: #3a3520 !important;
+        color: #ffffff !important;
+    }
+    [data-testid="stAppViewContainer"][data-theme="dark"] .success-box {
+        background-color: #1b3a1f !important;
+        color: #ffffff !important;
+    }
+    [data-testid="stAppViewContainer"][data-theme="dark"] .error-box {
+        background-color: #3a1f1f !important;
+        color: #ffffff !important;
     }
 </style>
 """, unsafe_allow_html=True)
