@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     
     # Gemini API
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "models/gemini-1.5-flash-latest"  # Updated model name (gemini-pro is deprecated)
+    GEMINI_MODEL: str = "gemini-1.5-flash"  # Updated model name (gemini-pro is deprecated)
     
     # Database
     DATABASE_URL: str = "sqlite:///./data/knowledge_assistant.db"
