@@ -1,4 +1,3 @@
-# app.py
 import os
 import pickle
 import faiss
@@ -7,96 +6,270 @@ import streamlit as st
 from sentence_transformers import SentenceTransformer
 from ingest_index import build_index
 from dotenv import load_dotenv
-load_dotenv()   # reads .env
+import google.generativeai as genai
 
-HF_TOKEN = os.getenv("HF_TOKEN")
+load_dotenv()
 
-# from gpt4all import GPT4All   # if using gpt4all
-# from llama_cpp import Llama  # if using llama-cpp-python
-os.environ["STREAMLIT_HOME"] = os.path.join(os.getcwd(), ".streamlit")
-os.makedirs(os.environ["STREAMLIT_HOME"], exist_ok=True)
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
+model = genai.GenerativeModel("gemini-2.5-flash")
 
+# ---------------------------
+# Page Config
+# ---------------------------
+st.set_page_config(
+    page_title="Nova AI",
+    page_icon="🤖",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-# ----------------------------
+# ---------------------------
 # Config
-# ----------------------------
+# ---------------------------
 EMBED_MODEL = "all-MiniLM-L6-v2"
 INDEX_PATH = "faiss.index"
 META_PATH = "meta.pkl"
-PDFS = ["docs/AI1.pdf", "docs/aiimpact.pdf"]  # PDFs inside your repo
+# Automatically load every PDF inside docs/
+PDFS = []
+
+if not os.path.exists("docs"):
+    os.makedirs("docs")
+
+for file in os.listdir("docs"):
+    if file.lower().endswith(".pdf"):
+        PDFS.append(os.path.join("docs", file))
 TOP_K = 4
 
-
-# ----------------------------
-# Load or build index
-# ----------------------------
+# ---------------------------
+# Load Resources
+# ---------------------------
 @st.cache_resource
 def load_resources():
+
     if not os.path.exists(INDEX_PATH) or not os.path.exists(META_PATH):
-        st.warning("Index not found. Building index from PDFs...")
-        build_index(PDFS, out_index=INDEX_PATH, out_meta=META_PATH)
+        build_index(PDFS, INDEX_PATH, META_PATH)
 
     embedder = SentenceTransformer(EMBED_MODEL)
     index = faiss.read_index(INDEX_PATH)
+
     with open(META_PATH, "rb") as f:
         meta = pickle.load(f)
 
-    # Optional: load local LLM if you want
-    # llm = GPT4All(model="gpt4all-l13b-snoozy.bin")
-    # return embedder, index, meta, llm
     return embedder, index, meta
 
 
 embedder, index, meta = load_resources()
 
-
-# ----------------------------
+# ---------------------------
 # Retrieval
-# ----------------------------
-def retrieve_contexts(query, k=TOP_K):
-    q_emb = embedder.encode([query], convert_to_numpy=True)
-    q_emb = q_emb / (np.linalg.norm(q_emb, axis=1, keepdims=True) + 1e-9)
-    D, I = index.search(q_emb, k)
-    hits = [meta[idx] for idx in I[0]]
-    return hits
+# ---------------------------
+def retrieve(query):
+
+    emb = embedder.encode([query], convert_to_numpy=True)
+
+    emb = emb / (
+        np.linalg.norm(emb, axis=1, keepdims=True) + 1e-9
+    )
+
+    D, I = index.search(emb, TOP_K)
+
+    return [meta[i] for i in I[0]]
 
 
-def make_prompt(question, contexts):
-    prompt = "You are a helpful assistant. Use ONLY the provided contexts to answer and cite sources like (doc.pdf, page 2).\n\n"
-    prompt += "CONTEXTS:\n"
+# ---------------------------
+# Session State
+# ---------------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# ---------------------------
+# Sidebar
+# ---------------------------
+with st.sidebar:
+
+    st.title("🤖 Nova AI")
+
+    st.button("➕ New Chat")
+
+    st.divider()
+
+    st.subheader("Recent Chats")
+
+    st.info("Chat history coming soon")
+
+    st.divider()
+
+    st.subheader("Documents")
+    uploaded_file = st.file_uploader(
+        "📄 Upload PDF",
+        type=["pdf"]
+        )
+
+
+    for pdf in PDFS:
+        st.success(os.path.basename(pdf))
+
+    st.divider()
+
+    st.toggle("Use RAG", value=True)
+
+    st.selectbox(
+        "Model",
+        [
+            "Gemini 2.5 Flash",
+            "Llama 3",
+            "GPT-4",
+        ],
+    )
+# ---------------------------
+# Handle Upload
+# ---------------------------
+
+if uploaded_file is not None:
+
+    save_path = os.path.join("docs", uploaded_file.name)
+
+    if os.path.exists(save_path):
+        st.warning("This PDF already exists.")
+    else:
+        with open(save_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+
+        st.success("PDF uploaded successfully!")
+
+        # Reload all PDFs from docs/
+        pdfs = [
+            os.path.join("docs", f)
+            for f in os.listdir("docs")
+            if f.lower().endswith(".pdf")
+        ]
+
+        build_index(
+            pdfs,
+            INDEX_PATH,
+            META_PATH
+        )
+
+        st.cache_resource.clear()
+
+        st.success("Knowledge Base Updated!")
+
+        st.rerun()
+
+# ---------------------------
+# Main Window
+# ---------------------------
+st.title("🤖 Nova AI")
+
+st.caption("Enterprise AI Assistant")
+
+if len(st.session_state.messages) == 0:
+
+    st.markdown(
+        """
+# 👋 Hello Veneel
+
+How can I help you today?
+"""
+    )
+
+# ---------------------------
+# Existing Chat
+# ---------------------------
+for msg in st.session_state.messages:
+
+    with st.chat_message(msg["role"]):
+
+        st.markdown(msg["content"])
+
+# ---------------------------
+# Chat Input
+# ---------------------------
+prompt = st.chat_input("Message Nova AI...")
+
+if prompt:
+
+    st.session_state.messages.append(
+        {
+            "role": "user",
+            "content": prompt,
+        }
+    )
+
+    with st.chat_message("user"):
+
+        st.markdown(prompt)
+
+    contexts = retrieve(prompt)
+    st.write("DEBUG")
+    st.write(contexts)
+
+
+    context_text = ""
+
     for c in contexts:
-        prompt += f"---\nSource: {c['doc_id']} | page: {c['page']}\n{c['text']}\n"
-    prompt += f"\nQUESTION: {question}\nANSWER (short, cite sources):"
-    return prompt
+        context_text += f"""
+    Document: {c['doc_id']}
+    Page: {c['page']}
 
+    {c['text']}
 
-# ----------------------------
-# Streamlit UI
-# ----------------------------
-st.title("📚 RAG Knowledge Assistant")
+    """
 
-query = st.text_input("Ask a question about the knowledge base")
+    prompt_for_llm = f"""
+    You are an intelligent RAG assistant.
 
-if st.button("Ask") and query.strip():
-    with st.spinner("Retrieving..."):
-        contexts = retrieve_contexts(query)
-    prompt = make_prompt(query, contexts)
+    Answer ONLY from the provided context.
 
-    # Show retrieved contexts
-    st.write("### Retrieved contexts")
-    for c in contexts:
-        preview = c["text"][:200].replace("\n", " ")
-        st.markdown(f"- **{c['doc_id']}**, page {c['page']} — {preview}...")
+    Context:
 
-    # Show answer
-    st.write("### Answer")
-    # If using GPT4All / Llama, uncomment below
-    # resp = llm.generate(prompt, max_tokens=512)
-    # st.write(resp)
-    st.info("LLM generation disabled in this demo. Retrieved contexts shown above.")
+    {context_text}
 
-    # Show sources
-    st.write("### Sources used")
-    for c in contexts:
-        st.write(f"- {c['doc_id']} (page {c['page']})")
+    Question:
+
+    {prompt}
+
+    Answer:
+    """
+
+    try:
+
+        response = model.generate_content(prompt_for_llm)
+
+        answer = response.text
+
+    except Exception as e:
+
+        answer = f"""
+    ⚠️ Gemini unavailable.
+
+    Retrieved Context
+
+    {context_text[:1500]}
+    """
+
+    with st.chat_message("assistant"):
+
+        st.markdown(answer)
+
+        with st.expander("📄 Sources"):
+
+            for c in contexts:
+
+                st.markdown(
+                    f"""
+**{c['doc_id']}**
+
+Page **{c['page']}**
+
+{c['text'][:300]}...
+"""
+                )
+
+    st.session_state.messages.append(
+        {
+            "role": "assistant",
+            "content": answer,
+        }
+    )

@@ -73,3 +73,4 @@ class WebSearcher:
 # Singleton instance
 web_searcher = WebSearcher()
 
+

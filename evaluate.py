@@ -25,6 +25,4 @@ def precision_at_k(query, gold_doc_ids, k=4):
     hits = [meta[idx]["doc_id"] for idx in I[0]]
     return sum(1 for h in hits if h in gold_doc_ids)/k
 
-# Example usage:
-# dataset = [{"query":"What is IBM cloud strategy?", "gold":["ibm_report.pdf"]}, ...]
-# compute mean precision@k
+

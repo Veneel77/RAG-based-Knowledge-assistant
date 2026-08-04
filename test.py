@@ -3,7 +3,7 @@ import os, requests
 HF_TOKEN = os.environ.get("HF_TOKEN")
 model = "tiiuae/falcon-7b-instruct"   # ✅ start simple
 
-url = f"https://api-inference.huggingface.co/models/{model}"
+url = f"https://router.huggingface.co/models/{model}"
 print("Calling:", url)
 
 headers = {"Authorization": f"Bearer {HF_TOKEN}"}
