@@ -3,273 +3,807 @@ import pickle
 import faiss
 import numpy as np
 import streamlit as st
+
 from sentence_transformers import SentenceTransformer
 from ingest_index import build_index
 from dotenv import load_dotenv
+
 import google.generativeai as genai
+
+
+# ============================================================
+# ENVIRONMENT
+# ============================================================
 
 load_dotenv()
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+GEMINI_API_KEY = os.getenv(
+    "GEMINI_API_KEY"
+)
 
-model = genai.GenerativeModel("gemini-2.5-flash")
+if not GEMINI_API_KEY:
 
-# ---------------------------
-# Page Config
-# ---------------------------
+    st.error(
+        "GEMINI_API_KEY is missing from .env"
+    )
+
+    st.stop()
+
+
+genai.configure(
+    api_key=GEMINI_API_KEY
+)
+
+model = genai.GenerativeModel(
+    "gemini-2.5-flash"
+)
+
+
+# ============================================================
+# PAGE CONFIG
+# ============================================================
+
 st.set_page_config(
     page_title="Nova AI",
     page_icon="🤖",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="expanded"
 )
 
-# ---------------------------
-# Config
-# ---------------------------
+
+# ============================================================
+# CONFIG
+# ============================================================
+
 EMBED_MODEL = "all-MiniLM-L6-v2"
+
 INDEX_PATH = "faiss.index"
+
 META_PATH = "meta.pkl"
-# Automatically load every PDF inside docs/
-PDFS = []
 
-if not os.path.exists("docs"):
-    os.makedirs("docs")
+DEFAULT_PDFS = [
+    "docs/AI1.pdf",
+    "docs/aiimpact.pdf"
+]
 
-for file in os.listdir("docs"):
-    if file.lower().endswith(".pdf"):
-        PDFS.append(os.path.join("docs", file))
-TOP_K = 4
-
-# ---------------------------
-# Load Resources
-# ---------------------------
-@st.cache_resource
-def load_resources():
-
-    if not os.path.exists(INDEX_PATH) or not os.path.exists(META_PATH):
-        build_index(PDFS, INDEX_PATH, META_PATH)
-
-    embedder = SentenceTransformer(EMBED_MODEL)
-    index = faiss.read_index(INDEX_PATH)
-
-    with open(META_PATH, "rb") as f:
-        meta = pickle.load(f)
-
-    return embedder, index, meta
+TOP_K = 5
 
 
-embedder, index, meta = load_resources()
+# ============================================================
+# SESSION STATE
+# ============================================================
 
-# ---------------------------
-# Retrieval
-# ---------------------------
-def retrieve(query):
-
-    emb = embedder.encode([query], convert_to_numpy=True)
-
-    emb = emb / (
-        np.linalg.norm(emb, axis=1, keepdims=True) + 1e-9
-    )
-
-    D, I = index.search(emb, TOP_K)
-
-    return [meta[i] for i in I[0]]
-
-
-# ---------------------------
-# Session State
-# ---------------------------
 if "messages" not in st.session_state:
+
     st.session_state.messages = []
 
-# ---------------------------
-# Sidebar
-# ---------------------------
-with st.sidebar:
 
-    st.title("🤖 Nova AI")
+if "uploaded_pdf" not in st.session_state:
 
-    st.button("➕ New Chat")
+    st.session_state.uploaded_pdf = None
 
-    st.divider()
 
-    st.subheader("Recent Chats")
+if "active_index" not in st.session_state:
 
-    st.info("Chat history coming soon")
+    st.session_state.active_index = None
 
-    st.divider()
 
-    st.subheader("Documents")
-    uploaded_file = st.file_uploader(
-        "📄 Upload PDF",
-        type=["pdf"]
+if "active_meta" not in st.session_state:
+
+    st.session_state.active_meta = None
+
+
+# ============================================================
+# EMBEDDING MODEL
+# ============================================================
+
+@st.cache_resource
+def load_embedder():
+
+    return SentenceTransformer(
+        EMBED_MODEL
+    )
+
+
+embedder = load_embedder()
+
+
+# ============================================================
+# LOAD INDEX
+# ============================================================
+
+def load_index(
+    index_path=INDEX_PATH,
+    meta_path=META_PATH
+):
+
+    if not os.path.exists(
+        index_path
+    ):
+
+        return None, []
+
+
+    if not os.path.exists(
+        meta_path
+    ):
+
+        return None, []
+
+
+    index = faiss.read_index(
+        index_path
+    )
+
+
+    with open(
+        meta_path,
+        "rb"
+    ) as f:
+
+        metadata = pickle.load(
+            f
         )
 
 
-    for pdf in PDFS:
-        st.success(os.path.basename(pdf))
+    return index, metadata
+
+
+# ============================================================
+# CREATE DEFAULT KNOWLEDGE BASE
+# ============================================================
+
+def create_default_index():
+
+    valid_pdfs = []
+
+    for pdf in DEFAULT_PDFS:
+
+        if os.path.exists(pdf):
+
+            valid_pdfs.append(pdf)
+
+
+    if not valid_pdfs:
+
+        return None, []
+
+
+    build_index(
+        valid_pdfs,
+        out_index=INDEX_PATH,
+        out_meta=META_PATH
+    )
+
+
+    return load_index()
+
+
+# ============================================================
+# INITIALIZE KNOWLEDGE BASE
+# ============================================================
+
+if (
+    st.session_state.active_index
+    is None
+):
+
+    index, metadata = load_index()
+
+
+    if index is None:
+
+        index, metadata = (
+            create_default_index()
+        )
+
+
+    st.session_state.active_index = (
+        index
+    )
+
+    st.session_state.active_meta = (
+        metadata
+    )
+
+
+# ============================================================
+# RETRIEVAL
+# ============================================================
+
+def retrieve(
+    query,
+    k=TOP_K
+):
+
+    index = (
+        st.session_state.active_index
+    )
+
+    metadata = (
+        st.session_state.active_meta
+    )
+
+
+    if index is None:
+
+        return []
+
+
+    if index.ntotal == 0:
+
+        return []
+
+
+    # --------------------------------------------------------
+    # Query embedding
+    # --------------------------------------------------------
+
+    query_embedding = embedder.encode(
+        [query],
+        convert_to_numpy=True
+    )
+
+
+    # --------------------------------------------------------
+    # Normalize
+    # --------------------------------------------------------
+
+    query_embedding = (
+        query_embedding
+        /
+        (
+            np.linalg.norm(
+                query_embedding,
+                axis=1,
+                keepdims=True
+            )
+            + 1e-9
+        )
+    )
+
+
+    query_embedding = (
+        query_embedding.astype(
+            "float32"
+        )
+    )
+
+
+    # --------------------------------------------------------
+    # Search
+    # --------------------------------------------------------
+
+    k = min(
+        k,
+        index.ntotal
+    )
+
+
+    distances, indices = (
+        index.search(
+            query_embedding,
+            k
+        )
+    )
+
+
+    results = []
+
+
+    for idx, distance in zip(
+        indices[0],
+        distances[0]
+    ):
+
+        if idx < 0:
+
+            continue
+
+
+        if idx >= len(metadata):
+
+            continue
+
+
+        chunk = metadata[idx].copy()
+
+
+        chunk["similarity"] = (
+            float(distance)
+        )
+
+
+        results.append(
+            chunk
+        )
+
+
+    return results
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+with st.sidebar:
+
+    st.title(
+        "🤖 Nova AI"
+    )
+
+
+    # --------------------------------------------------------
+    # New Chat
+    # --------------------------------------------------------
+
+    if st.button(
+        "➕ New Chat",
+        use_container_width=True
+    ):
+
+        st.session_state.messages = []
+
+        st.rerun()
+
 
     st.divider()
 
-    st.toggle("Use RAG", value=True)
+
+    # ========================================================
+    # PDF UPLOAD
+    # ========================================================
+
+    st.subheader(
+        "📄 Upload Document"
+    )
+
+
+    uploaded_file = st.file_uploader(
+        "Upload a PDF",
+        type=["pdf"]
+    )
+
+
+    if uploaded_file is not None:
+
+        # ----------------------------------------------------
+        # Prevent repeated processing
+        # ----------------------------------------------------
+
+        if (
+            st.session_state.uploaded_pdf
+            != uploaded_file.name
+        ):
+
+            with st.spinner(
+                "Processing your PDF..."
+            ):
+
+                # --------------------------------------------
+                # Save uploaded PDF
+                # --------------------------------------------
+
+                os.makedirs(
+                    "uploads",
+                    exist_ok=True
+                )
+
+
+                upload_path = os.path.join(
+                    "uploads",
+                    uploaded_file.name
+                )
+
+
+                with open(
+                    upload_path,
+                    "wb"
+                ) as f:
+
+                    f.write(
+                        uploaded_file.getbuffer()
+                    )
+
+
+                # --------------------------------------------
+                # IMPORTANT
+                # ONLY USER PDF IS INDEXED
+                # --------------------------------------------
+
+                build_index(
+                    [upload_path],
+
+                    out_index=INDEX_PATH,
+
+                    out_meta=META_PATH
+                )
+
+
+                # --------------------------------------------
+                # Load new index
+                # --------------------------------------------
+
+                new_index, new_metadata = (
+                    load_index()
+                )
+
+
+                st.session_state.active_index = (
+                    new_index
+                )
+
+                st.session_state.active_meta = (
+                    new_metadata
+                )
+
+
+                st.session_state.uploaded_pdf = (
+                    uploaded_file.name
+                )
+
+
+                # --------------------------------------------
+                # Clear previous conversation
+                # --------------------------------------------
+
+                st.session_state.messages = []
+
+
+            st.success(
+                f"{uploaded_file.name} is ready!"
+            )
+
+
+    # ========================================================
+    # ACTIVE DOCUMENT
+    # ========================================================
+
+    st.divider()
+
+    st.subheader(
+        "📚 Current Knowledge"
+    )
+
+
+    if st.session_state.uploaded_pdf:
+
+        st.success(
+            f"📄 {st.session_state.uploaded_pdf}"
+        )
+
+        st.caption(
+            "Questions are answered using this uploaded document."
+        )
+
+    else:
+
+        st.info(
+            "Using default knowledge base."
+        )
+
+        for pdf in DEFAULT_PDFS:
+
+            if os.path.exists(pdf):
+
+                st.caption(
+                    f"📄 {os.path.basename(pdf)}"
+                )
+
+
+    # ========================================================
+    # MODEL
+    # ========================================================
+
+    st.divider()
 
     st.selectbox(
         "Model",
         [
-            "Gemini 2.5 Flash",
-            "Llama 3",
-            "GPT-4",
-        ],
-    )
-# ---------------------------
-# Handle Upload
-# ---------------------------
-
-if uploaded_file is not None:
-
-    save_path = os.path.join("docs", uploaded_file.name)
-
-    if os.path.exists(save_path):
-        st.warning("This PDF already exists.")
-    else:
-        with open(save_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-
-        st.success("PDF uploaded successfully!")
-
-        # Reload all PDFs from docs/
-        pdfs = [
-            os.path.join("docs", f)
-            for f in os.listdir("docs")
-            if f.lower().endswith(".pdf")
+            "Gemini 2.5 Flash"
         ]
+    )
 
-        build_index(
-            pdfs,
-            INDEX_PATH,
-            META_PATH
+
+    # ========================================================
+    # STATS
+    # ========================================================
+
+    if (
+        st.session_state.active_index
+        is not None
+    ):
+
+        st.caption(
+            "Indexed chunks: "
+            +
+            str(
+                st.session_state
+                .active_index
+                .ntotal
+            )
         )
 
-        st.cache_resource.clear()
 
-        st.success("Knowledge Base Updated!")
+# ============================================================
+# MAIN HEADER
+# ============================================================
 
-        st.rerun()
+st.title(
+    "🤖 Nova AI"
+)
 
-# ---------------------------
-# Main Window
-# ---------------------------
-st.title("🤖 Nova AI")
+st.caption(
+    "Chat with your documents using Retrieval-Augmented Generation"
+)
 
-st.caption("Enterprise AI Assistant")
 
-if len(st.session_state.messages) == 0:
+# ============================================================
+# WELCOME
+# ============================================================
 
-    st.markdown(
-        """
-# 👋 Hello Veneel
+if len(
+    st.session_state.messages
+) == 0:
 
-How can I help you today?
+    if st.session_state.uploaded_pdf:
+
+        st.markdown(
+            f"""
+## 👋 You're ready!
+
+I've processed:
+
+**📄 {st.session_state.uploaded_pdf}**
+
+Ask me anything about this document.
 """
-    )
+        )
 
-# ---------------------------
-# Existing Chat
-# ---------------------------
-for msg in st.session_state.messages:
+    else:
 
-    with st.chat_message(msg["role"]):
+        st.markdown(
+            """
+## 👋 Welcome to Nova AI
 
-        st.markdown(msg["content"])
+Upload a PDF from the sidebar and ask questions about it.
 
-# ---------------------------
-# Chat Input
-# ---------------------------
-prompt = st.chat_input("Message Nova AI...")
+You can also try the default knowledge base.
+"""
+        )
 
-if prompt:
+
+# ============================================================
+# DISPLAY CHAT HISTORY
+# ============================================================
+
+for message in (
+    st.session_state.messages
+):
+
+    with st.chat_message(
+        message["role"]
+    ):
+
+        st.markdown(
+            message["content"]
+        )
+
+
+# ============================================================
+# CHAT INPUT
+# ============================================================
+
+user_query = st.chat_input(
+    "Message Nova AI..."
+)
+
+
+# ============================================================
+# PROCESS USER QUERY
+# ============================================================
+
+if user_query:
+
+    # --------------------------------------------------------
+    # USER MESSAGE
+    # --------------------------------------------------------
 
     st.session_state.messages.append(
         {
             "role": "user",
-            "content": prompt,
+            "content": user_query
         }
     )
 
-    with st.chat_message("user"):
 
-        st.markdown(prompt)
+    with st.chat_message(
+        "user"
+    ):
 
-    contexts = retrieve(prompt)
-    st.write("DEBUG")
-    st.write(contexts)
+        st.markdown(
+            user_query
+        )
 
 
-    context_text = ""
+    # --------------------------------------------------------
+    # RETRIEVE
+    # --------------------------------------------------------
 
-    for c in contexts:
-        context_text += f"""
-    Document: {c['doc_id']}
-    Page: {c['page']}
+    contexts = retrieve(
+        user_query
+    )
 
-    {c['text']}
 
-    """
+    # --------------------------------------------------------
+    # NO CONTEXT
+    # --------------------------------------------------------
 
-    prompt_for_llm = f"""
-    You are an intelligent RAG assistant.
+    if not contexts:
 
-    Answer ONLY from the provided context.
+        answer = (
+            "I couldn't find relevant information "
+            "in the current document."
+        )
 
-    Context:
+        with st.chat_message(
+            "assistant"
+        ):
 
-    {context_text}
+            st.markdown(
+                answer
+            )
 
-    Question:
 
-    {prompt}
+    else:
 
-    Answer:
-    """
+        # ----------------------------------------------------
+        # BUILD CONTEXT
+        # ----------------------------------------------------
 
-    try:
+        context_text = ""
 
-        response = model.generate_content(prompt_for_llm)
 
-        answer = response.text
+        for i, chunk in enumerate(
+            contexts,
+            start=1
+        ):
 
-    except Exception as e:
+            context_text += f"""
 
-        answer = f"""
-    ⚠️ Gemini unavailable.
+[Source {i}]
 
-    Retrieved Context
+Document:
+{chunk.get("doc_id", "Unknown")}
 
-    {context_text[:1500]}
-    """
+Page:
+{chunk.get("page", "Unknown")}
 
-    with st.chat_message("assistant"):
+Content:
+{chunk.get("text", "")}
 
-        st.markdown(answer)
-
-        with st.expander("📄 Sources"):
-
-            for c in contexts:
-
-                st.markdown(
-                    f"""
-**{c['doc_id']}**
-
-Page **{c['page']}**
-
-{c['text'][:300]}...
 """
-                )
+
+
+        # ----------------------------------------------------
+        # GEMINI PROMPT
+        # ----------------------------------------------------
+
+        prompt_for_llm = f"""
+
+You are Nova AI, a document question-answering assistant.
+
+Your job is to answer the user's question using ONLY
+the information contained in the retrieved document context.
+
+RULES:
+
+1. Ground your answer in the provided context.
+2. Do not invent information.
+3. If the answer is not present in the context, say:
+   "I couldn't find this information in the uploaded document."
+4. Give a clear and useful answer.
+5. When possible, mention the source document and page.
+6. Do not claim information that is not supported by the context.
+
+==============================
+RETRIEVED DOCUMENT CONTEXT
+==============================
+
+{context_text}
+
+==============================
+USER QUESTION
+==============================
+
+{user_query}
+
+==============================
+ANSWER
+==============================
+"""
+
+
+        # ----------------------------------------------------
+        # GEMINI
+        # ----------------------------------------------------
+
+        with st.chat_message(
+            "assistant"
+        ):
+
+            with st.spinner(
+                "Thinking..."
+            ):
+
+                try:
+
+                    response = (
+                        model.generate_content(
+                            prompt_for_llm
+                        )
+                    )
+
+
+                    if (
+                        response
+                        and response.text
+                    ):
+
+                        answer = (
+                            response.text.strip()
+                        )
+
+                    else:
+
+                        answer = (
+                            "I couldn't generate an answer."
+                        )
+
+
+                except Exception as e:
+
+                    answer = (
+                        "Gemini encountered an error.\n\n"
+                        f"{str(e)}"
+                    )
+
+
+            st.markdown(
+                answer
+            )
+
+
+            # ------------------------------------------------
+            # SOURCES
+            # ------------------------------------------------
+
+            with st.expander(
+                "📚 Sources used"
+            ):
+
+                for chunk in contexts:
+
+                    st.markdown(
+                        f"""
+**{chunk.get("doc_id", "Unknown")}**
+
+Page **{chunk.get("page", "Unknown")}**
+
+Similarity: `{chunk.get("similarity", 0):.3f}`
+
+{chunk.get("text", "")[:500]}...
+"""
+                    )
+
+
+    # --------------------------------------------------------
+    # SAVE ASSISTANT MESSAGE
+    # --------------------------------------------------------
 
     st.session_state.messages.append(
         {
             "role": "assistant",
-            "content": answer,
+            "content": answer
         }
     )
