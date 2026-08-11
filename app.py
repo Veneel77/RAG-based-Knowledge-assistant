@@ -1,15 +1,26 @@
+import streamlit as st
+
+st.write("🚀 Nova AI is starting...")
+
 import os
 import pickle
 import faiss
 import numpy as np
-import streamlit as st
+
+st.write("✅ Basic imports loaded")
 
 from sentence_transformers import SentenceTransformer
-from ingest_index import build_index
-from dotenv import load_dotenv
 
+st.write("✅ Sentence Transformers loaded")
+
+from ingest_index import build_index
+
+st.write("✅ Ingest module loaded")
+
+from dotenv import load_dotenv
 import google.generativeai as genai
 
+st.write("✅ All imports loaded")
 
 # ============================================================
 # ENVIRONMENT
