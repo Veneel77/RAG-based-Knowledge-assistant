@@ -17,17 +17,50 @@ import google.generativeai as genai
 
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv(
-    "GEMINI_API_KEY"
-)
+# ============================================================
+# GEMINI CONFIGURATION
+# ============================================================
+
+# First try Streamlit Cloud Secrets
+try:
+    GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY")
+except Exception:
+    GEMINI_API_KEY = None
+
+# If Streamlit Secrets isn't available,
+# fall back to local .env
+if not GEMINI_API_KEY:
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not GEMINI_API_KEY:
-
     st.error(
-        "GEMINI_API_KEY is missing from .env"
+        "GEMINI_API_KEY is not configured. "
+        "Add it to Streamlit Secrets or your local .env file."
+    )
+    st.stop()
+
+# Get model from Secrets first, then .env, then default
+try:
+    GEMINI_MODEL = st.secrets.get(
+        "GEMINI_MODEL",
+        os.getenv(
+            "GEMINI_MODEL",
+            "gemini-2.5-flash"
+        )
+    )
+except Exception:
+    GEMINI_MODEL = os.getenv(
+        "GEMINI_MODEL",
+        "gemini-2.5-flash"
     )
 
-    st.stop()
+genai.configure(
+    api_key=GEMINI_API_KEY
+)
+
+model = genai.GenerativeModel(
+    GEMINI_MODEL
+)
 
 
 genai.configure(
