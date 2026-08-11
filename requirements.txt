@@ -1,1 +1,11 @@
 streamlit==1.61.1
+google-generativeai==0.8.6
+sentence-transformers==3.4.1
+faiss-cpu==1.15.0
+PyPDF2==3.0.1
+python-dotenv==1.0.1
+tqdm==4.67.1
+numpy==1.26.4
+scipy==1.13.1
+scikit-learn==1.5.2
+torch==2.2.2
