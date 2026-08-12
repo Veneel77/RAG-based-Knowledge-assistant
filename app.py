@@ -1,19 +1,27 @@
+# ============================================================
+# NOVA AI
+# Retrieval-Augmented Generation Knowledge Assistant
+# ============================================================
+
 import os
 import pickle
 import hashlib
-from io import BytesIO
+import tempfile
+from pathlib import Path
 
 import faiss
 import numpy as np
 import streamlit as st
-from sentence_transformers import SentenceTransformer
-from PyPDF2 import PdfReader
-import google.generativeai as genai
 from dotenv import load_dotenv
+from sentence_transformers import SentenceTransformer
+import google.generativeai as genai
+
+from ingest_index import build_index
 
 
 # ============================================================
-# 1. PAGE CONFIG
+# PAGE CONFIG
+# IMPORTANT: This must be the FIRST Streamlit command.
 # ============================================================
 
 st.set_page_config(
@@ -25,21 +33,28 @@ st.set_page_config(
 
 
 # ============================================================
-# 2. ENVIRONMENT / SECRETS
+# ENVIRONMENT
 # ============================================================
 
 load_dotenv()
 
 
+# ============================================================
+# GEMINI CONFIGURATION
+# ============================================================
+
 def get_secret(name, default=None):
     """
-    Read configuration from Streamlit Secrets first.
-    Fall back to .env for local development.
+    Read a value from Streamlit Secrets first.
+    Fall back to environment variables for local development.
     """
 
     try:
-        if name in st.secrets:
-            return st.secrets[name]
+        value = st.secrets.get(name)
+
+        if value:
+            return value
+
     except Exception:
         pass
 
@@ -47,26 +62,26 @@ def get_secret(name, default=None):
 
 
 GEMINI_API_KEY = get_secret("GEMINI_API_KEY")
-
 GEMINI_MODEL = get_secret(
     "GEMINI_MODEL",
     "gemini-2.5-flash"
 )
 
 
-# ============================================================
-# 3. GEMINI CONFIGURATION
-# ============================================================
-
 if not GEMINI_API_KEY:
-
     st.error(
-        "⚠️ Gemini API key is not configured.\n\n"
-        "Please add GEMINI_API_KEY to Streamlit Secrets."
+        "❌ Gemini API key is not configured.\n\n"
+        "For Streamlit Cloud, add GEMINI_API_KEY "
+        "under App Settings → Secrets.\n\n"
+        "For local development, add GEMINI_API_KEY "
+        "to your .env file."
     )
-
     st.stop()
 
+
+# ============================================================
+# INITIALIZE GEMINI
+# ============================================================
 
 try:
 
@@ -81,582 +96,50 @@ try:
 except Exception as e:
 
     st.error(
-        "⚠️ Gemini initialization failed.\n\n"
-        "Please verify your Gemini API key and model configuration."
+        "❌ Gemini initialization failed."
     )
 
-    print(f"Gemini initialization error: {e}")
+    st.code(
+        str(e)
+    )
 
     st.stop()
 
 
 # ============================================================
-# 4. APPLICATION CONFIG
+# APPLICATION CONFIGURATION
 # ============================================================
 
 EMBED_MODEL = "all-MiniLM-L6-v2"
 
-INDEX_PATH = "faiss.index"
-META_PATH = "meta.pkl"
+DEFAULT_INDEX_PATH = "faiss.index"
+DEFAULT_META_PATH = "meta.pkl"
+
+DEFAULT_PDFS = [
+    "docs/AI1.pdf",
+    "docs/aiimpact.pdf",
+]
 
 TOP_K = 5
 
-CHUNK_SIZE = 500
-CHUNK_OVERLAP = 50
-
 
 # ============================================================
-# 5. LOAD EMBEDDING MODEL
-# ============================================================
-
-@st.cache_resource
-def load_embedder():
-
-    return SentenceTransformer(
-        EMBED_MODEL
-    )
-
-
-embedder = load_embedder()
-
-
-# ============================================================
-# 6. LOAD DEFAULT KNOWLEDGE BASE
-# ============================================================
-
-@st.cache_resource
-def load_knowledge_base():
-
-    if not os.path.exists(INDEX_PATH):
-
-        return None, []
-
-    if not os.path.exists(META_PATH):
-
-        return None, []
-
-    try:
-
-        index = faiss.read_index(
-            INDEX_PATH
-        )
-
-        with open(
-            META_PATH,
-            "rb"
-        ) as f:
-
-            metadata = pickle.load(f)
-
-        return index, metadata
-
-    except Exception as e:
-
-        print(
-            f"Knowledge base loading error: {e}"
-        )
-
-        return None, []
-
-
-knowledge_index, knowledge_metadata = (
-    load_knowledge_base()
-)
-
-
-# ============================================================
-# 7. PDF TEXT EXTRACTION
-# ============================================================
-
-def extract_pdf_pages(pdf_bytes):
-
-    reader = PdfReader(
-        BytesIO(pdf_bytes)
-    )
-
-    pages = []
-
-    for page_number, page in enumerate(
-        reader.pages,
-        start=1
-    ):
-
-        try:
-
-            text = page.extract_text() or ""
-
-        except Exception:
-
-            text = ""
-
-        if text.strip():
-
-            pages.append(
-                {
-                    "page": page_number,
-                    "text": text,
-                }
-            )
-
-    return pages
-
-
-# ============================================================
-# 8. TEXT CHUNKING
-# ============================================================
-
-def chunk_text(
-    text,
-    chunk_size=CHUNK_SIZE,
-    overlap=CHUNK_OVERLAP
-):
-
-    chunks = []
-
-    start = 0
-
-    step = chunk_size - overlap
-
-    while start < len(text):
-
-        end = min(
-            len(text),
-            start + chunk_size
-        )
-
-        chunk = text[start:end].strip()
-
-        if chunk:
-
-            chunks.append(
-                chunk
-            )
-
-        start += step
-
-    return chunks
-
-
-# ============================================================
-# 9. PROCESS USER-UPLOADED PDF
-# ============================================================
-
-def process_uploaded_pdf(
-    pdf_bytes,
-    filename
-):
-
-    pages = extract_pdf_pages(
-        pdf_bytes
-    )
-
-    if not pages:
-
-        raise ValueError(
-            "Could not extract readable text from this PDF."
-        )
-
-    all_chunks = []
-
-    metadata = []
-
-    for page_data in pages:
-
-        page_number = page_data["page"]
-
-        text = page_data["text"]
-
-        chunks = chunk_text(
-            text
-        )
-
-        for chunk in chunks:
-
-            all_chunks.append(
-                chunk
-            )
-
-            metadata.append(
-                {
-                    "doc_id": filename,
-                    "page": page_number,
-                    "text": chunk,
-                    "source": "uploaded",
-                }
-            )
-
-    if not all_chunks:
-
-        raise ValueError(
-            "No readable text was found in the uploaded PDF."
-        )
-
-    # --------------------------------------------------------
-    # Generate embeddings
-    # --------------------------------------------------------
-
-    embeddings = embedder.encode(
-        all_chunks,
-        convert_to_numpy=True,
-        show_progress_bar=False
-    )
-
-    embeddings = embeddings.astype(
-        "float32"
-    )
-
-    # --------------------------------------------------------
-    # Normalize for cosine similarity
-    # --------------------------------------------------------
-
-    embeddings = embeddings / (
-        np.linalg.norm(
-            embeddings,
-            axis=1,
-            keepdims=True
-        )
-        + 1e-9
-    )
-
-    dimension = embeddings.shape[1]
-
-    # --------------------------------------------------------
-    # Create temporary uploaded-document index
-    # --------------------------------------------------------
-
-    uploaded_index = faiss.IndexFlatIP(
-        dimension
-    )
-
-    uploaded_index.add(
-        embeddings
-    )
-
-    return (
-        uploaded_index,
-        metadata
-    )
-
-
-# ============================================================
-# 10. RETRIEVAL
-# ============================================================
-
-def retrieve(
-    query,
-    index,
-    metadata,
-    top_k=TOP_K
-):
-
-    if index is None:
-
-        return []
-
-    if not metadata:
-
-        return []
-
-    if index.ntotal == 0:
-
-        return []
-
-    # --------------------------------------------------------
-    # Query embedding
-    # --------------------------------------------------------
-
-    query_embedding = embedder.encode(
-        [query],
-        convert_to_numpy=True,
-        show_progress_bar=False
-    )
-
-    query_embedding = query_embedding.astype(
-        "float32"
-    )
-
-    # --------------------------------------------------------
-    # Normalize
-    # --------------------------------------------------------
-
-    query_embedding = query_embedding / (
-        np.linalg.norm(
-            query_embedding,
-            axis=1,
-            keepdims=True
-        )
-        + 1e-9
-    )
-
-    # --------------------------------------------------------
-    # Search
-    # --------------------------------------------------------
-
-    k = min(
-        top_k,
-        index.ntotal,
-        len(metadata)
-    )
-
-    if k <= 0:
-
-        return []
-
-    distances, indices = index.search(
-        query_embedding,
-        k
-    )
-
-    results = []
-
-    for distance, index_position in zip(
-        distances[0],
-        indices[0]
-    ):
-
-        if index_position < 0:
-
-            continue
-
-        if index_position >= len(metadata):
-
-            continue
-
-        item = metadata[
-            index_position
-        ].copy()
-
-        item[
-            "similarity_score"
-        ] = float(distance)
-
-        results.append(
-            item
-        )
-
-    return results
-
-
-# ============================================================
-# 11. GEMINI RESPONSE GENERATION
-# ============================================================
-
-def generate_answer(
-    query,
-    contexts,
-    conversation_history
-):
-
-    # --------------------------------------------------------
-    # No retrieved information
-    # --------------------------------------------------------
-
-    if not contexts:
-
-        return (
-            "I couldn't find relevant information "
-            "in the current knowledge source."
-        )
-
-
-    # --------------------------------------------------------
-    # Build context
-    # --------------------------------------------------------
-
-    context_parts = []
-
-    for i, context in enumerate(
-        contexts,
-        start=1
-    ):
-
-        context_parts.append(
-            f"""
-[Source {i}]
-
-Document:
-{context.get("doc_id", "Unknown")}
-
-Page:
-{context.get("page", "Unknown")}
-
-Content:
-{context.get("text", "")}
-"""
-        )
-
-    context_text = "\n".join(
-        context_parts
-    )
-
-
-    # --------------------------------------------------------
-    # Conversation history
-    # --------------------------------------------------------
-
-    history_text = ""
-
-    if conversation_history:
-
-        history_parts = []
-
-        for message in conversation_history[-6:]:
-
-            history_parts.append(
-                f'{message["role"].upper()}: '
-                f'{message["content"]}'
-            )
-
-        history_text = "\n".join(
-            history_parts
-        )
-
-
-    # --------------------------------------------------------
-    # Prompt
-    # --------------------------------------------------------
-
-    prompt = f"""
-You are Nova AI, a reliable Retrieval-Augmented Generation
-assistant.
-
-Your job is to answer the user's question using the
-retrieved document context provided below.
-
-IMPORTANT RULES:
-
-1. Use the retrieved context as the primary source of truth.
-
-2. Do NOT invent facts that are not supported by the
-   retrieved context.
-
-3. If the retrieved context does not contain enough
-   information to answer the question, clearly say that
-   the information was not found in the current knowledge
-   source.
-
-4. Give a clear, direct and useful answer.
-
-5. Explain concepts in simple language when appropriate.
-
-6. Use bullet points or sections when they improve clarity.
-
-7. Do not mention internal implementation details unless
-   the user asks about them.
-
-8. If the user asks a question about an uploaded document,
-   stay focused on that uploaded document.
-
-9. Do not mix information from another document or
-   knowledge source.
-
-10. Never pretend that information exists in the document
-    when it does not.
-
-==============================
-CONVERSATION HISTORY
-==============================
-
-{history_text}
-
-==============================
-RETRIEVED DOCUMENT CONTEXT
-==============================
-
-{context_text}
-
-==============================
-USER QUESTION
-==============================
-
-{query}
-
-==============================
-ANSWER
-==============================
-"""
-
-    # --------------------------------------------------------
-    # Gemini generation
-    # --------------------------------------------------------
-
-    try:
-
-        response = model.generate_content(
-            prompt
-        )
-
-        if response and response.text:
-
-            return response.text.strip()
-
-        return (
-            "I couldn't generate an answer from "
-            "the retrieved information."
-        )
-
-    except Exception as e:
-
-        error_message = str(e).lower()
-
-        # ----------------------------------------------------
-        # QUOTA / RATE LIMIT
-        # ----------------------------------------------------
-
-        if (
-            "429" in error_message
-            or "quota" in error_message
-            or "rate limit" in error_message
-            or "resource exhausted" in error_message
-        ):
-
-            return (
-                "⚠️ **Gemini free-tier limit reached.**\n\n"
-                "Nova AI successfully searched the document, "
-                "but Gemini is temporarily unavailable because "
-                "the current free-tier generation quota has "
-                "been reached.\n\n"
-                "Please try again after the quota resets."
-            )
-
-        # ----------------------------------------------------
-        # API KEY / AUTHENTICATION
-        # ----------------------------------------------------
-
-        if (
-            "api key" in error_message
-            or "authentication" in error_message
-            or "permission" in error_message
-            or "403" in error_message
-        ):
-
-            return (
-                "⚠️ **Gemini authentication failed.**\n\n"
-                "Please verify the Gemini API key configured "
-                "in Streamlit Secrets."
-            )
-
-        # ----------------------------------------------------
-        # GENERIC ERROR
-        # ----------------------------------------------------
-
-        print(
-            f"Gemini generation error: {e}"
-        )
-
-        return (
-            "⚠️ I encountered a temporary error while "
-            "generating the answer. Please try again."
-        )
-
-
-# ============================================================
-# 12. SESSION STATE
+# SESSION STATE
 # ============================================================
 
 if "messages" not in st.session_state:
 
     st.session_state.messages = []
+
+
+if "uploaded_pdf" not in st.session_state:
+
+    st.session_state.uploaded_pdf = None
+
+
+if "uploaded_file_hash" not in st.session_state:
+
+    st.session_state.uploaded_file_hash = None
 
 
 if "uploaded_index" not in st.session_state:
@@ -669,18 +152,390 @@ if "uploaded_metadata" not in st.session_state:
     st.session_state.uploaded_metadata = []
 
 
-if "uploaded_file_hash" not in st.session_state:
+if "default_index" not in st.session_state:
 
-    st.session_state.uploaded_file_hash = None
+    st.session_state.default_index = None
 
 
-if "uploaded_filename" not in st.session_state:
+if "default_metadata" not in st.session_state:
 
-    st.session_state.uploaded_filename = None
+    st.session_state.default_metadata = []
 
 
 # ============================================================
-# 13. SIDEBAR
+# EMBEDDING MODEL
+# ============================================================
+
+@st.cache_resource
+def load_embedder():
+
+    return SentenceTransformer(
+        EMBED_MODEL
+    )
+
+
+# ============================================================
+# LOAD FAISS INDEX
+# ============================================================
+
+def load_index(
+    index_path,
+    meta_path
+):
+
+    if not os.path.exists(index_path):
+
+        return None, []
+
+
+    if not os.path.exists(meta_path):
+
+        return None, []
+
+
+    try:
+
+        index = faiss.read_index(
+            index_path
+        )
+
+        with open(
+            meta_path,
+            "rb"
+        ) as f:
+
+            metadata = pickle.load(f)
+
+
+        return index, metadata
+
+
+    except Exception as e:
+
+        st.error(
+            "❌ Could not load FAISS knowledge base."
+        )
+
+        st.code(
+            str(e)
+        )
+
+        return None, []
+
+
+# ============================================================
+# LOAD DEFAULT KNOWLEDGE BASE
+# ============================================================
+
+def load_default_knowledge_base():
+
+    index, metadata = load_index(
+        DEFAULT_INDEX_PATH,
+        DEFAULT_META_PATH
+    )
+
+
+    if index is not None:
+
+        return index, metadata
+
+
+    # If FAISS files are missing, build them
+    valid_pdfs = [
+        pdf
+        for pdf in DEFAULT_PDFS
+        if os.path.exists(pdf)
+    ]
+
+
+    if not valid_pdfs:
+
+        return None, []
+
+
+    try:
+
+        build_index(
+            valid_pdfs,
+            out_index=DEFAULT_INDEX_PATH,
+            out_meta=DEFAULT_META_PATH
+        )
+
+
+        return load_index(
+            DEFAULT_INDEX_PATH,
+            DEFAULT_META_PATH
+        )
+
+
+    except Exception as e:
+
+        st.error(
+            "❌ Could not create the default knowledge base."
+        )
+
+        st.code(
+            str(e)
+        )
+
+        return None, []
+
+
+# ============================================================
+# INITIALIZE DEFAULT KNOWLEDGE BASE
+# ============================================================
+
+if st.session_state.default_index is None:
+
+    (
+        st.session_state.default_index,
+        st.session_state.default_metadata
+    ) = load_default_knowledge_base()
+
+
+# ============================================================
+# GET ACTIVE KNOWLEDGE BASE
+# ============================================================
+
+def get_active_knowledge_base():
+
+    # Uploaded PDF takes priority
+    if (
+        st.session_state.uploaded_index
+        is not None
+    ):
+
+        return (
+            st.session_state.uploaded_index,
+            st.session_state.uploaded_metadata,
+            "uploaded"
+        )
+
+
+    # Otherwise use default KB
+    return (
+        st.session_state.default_index,
+        st.session_state.default_metadata,
+        "default"
+    )
+
+
+# ============================================================
+# RETRIEVAL
+# ============================================================
+
+def retrieve(
+    query,
+    k=TOP_K
+):
+
+    (
+        index,
+        metadata,
+        source_type
+    ) = get_active_knowledge_base()
+
+
+    if index is None:
+
+        return []
+
+
+    if index.ntotal == 0:
+
+        return []
+
+
+    if not metadata:
+
+        return []
+
+
+    try:
+
+        embedder = load_embedder()
+
+
+        # ----------------------------------------------------
+        # Create query embedding
+        # ----------------------------------------------------
+
+        query_embedding = embedder.encode(
+            [query],
+            convert_to_numpy=True
+        )
+
+
+        # ----------------------------------------------------
+        # Normalize embedding
+        # ----------------------------------------------------
+
+        query_embedding = (
+            query_embedding
+            /
+            (
+                np.linalg.norm(
+                    query_embedding,
+                    axis=1,
+                    keepdims=True
+                )
+                + 1e-9
+            )
+        )
+
+
+        query_embedding = (
+            query_embedding.astype(
+                "float32"
+            )
+        )
+
+
+        # ----------------------------------------------------
+        # Search FAISS
+        # ----------------------------------------------------
+
+        k = min(
+            k,
+            index.ntotal
+        )
+
+
+        distances, indices = index.search(
+            query_embedding,
+            k
+        )
+
+
+        results = []
+
+
+        for idx, distance in zip(
+            indices[0],
+            distances[0]
+        ):
+
+            if idx < 0:
+
+                continue
+
+
+            if idx >= len(metadata):
+
+                continue
+
+
+            chunk = metadata[idx].copy()
+
+
+            chunk["similarity"] = float(
+                distance
+            )
+
+
+            results.append(
+                chunk
+            )
+
+
+        return results
+
+
+    except Exception as e:
+
+        st.error(
+            "❌ Retrieval failed."
+        )
+
+        st.code(
+            str(e)
+        )
+
+        return []
+
+
+# ============================================================
+# PROCESS UPLOADED PDF
+# ============================================================
+
+def process_uploaded_pdf(
+    pdf_bytes,
+    filename
+):
+
+    """
+    Creates a temporary FAISS index for the uploaded PDF.
+
+    IMPORTANT:
+    This does NOT overwrite:
+        faiss.index
+        meta.pkl
+
+    Therefore the default knowledge base remains safe.
+    """
+
+    # Create a temporary directory
+    temp_dir = tempfile.mkdtemp(
+        prefix="nova_upload_"
+    )
+
+
+    upload_path = os.path.join(
+        temp_dir,
+        filename
+    )
+
+
+    uploaded_index_path = os.path.join(
+        temp_dir,
+        "uploaded.faiss"
+    )
+
+
+    uploaded_meta_path = os.path.join(
+        temp_dir,
+        "uploaded_meta.pkl"
+    )
+
+
+    # Save uploaded PDF
+    with open(
+        upload_path,
+        "wb"
+    ) as f:
+
+        f.write(
+            pdf_bytes
+        )
+
+
+    # Build ONLY uploaded document index
+    build_index(
+        [upload_path],
+        out_index=uploaded_index_path,
+        out_meta=uploaded_meta_path
+    )
+
+
+    # Load temporary index
+    index, metadata = load_index(
+        uploaded_index_path,
+        uploaded_meta_path
+    )
+
+
+    if index is None:
+
+        raise RuntimeError(
+            "Uploaded PDF index could not be created."
+        )
+
+
+    return index, metadata
+
+
+# ============================================================
+# SIDEBAR
 # ============================================================
 
 with st.sidebar:
@@ -690,15 +545,13 @@ with st.sidebar:
     )
 
     st.caption(
-        "Enterprise RAG Knowledge Assistant"
+        "RAG Knowledge Assistant"
     )
 
-    st.divider()
 
-
-    # --------------------------------------------------------
+    # ========================================================
     # NEW CHAT
-    # --------------------------------------------------------
+    # ========================================================
 
     if st.button(
         "➕ New Chat",
@@ -713,20 +566,21 @@ with st.sidebar:
     st.divider()
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # PDF UPLOAD
-    # --------------------------------------------------------
+    # ========================================================
 
     st.subheader(
-        "📄 Documents"
+        "📄 Upload Document"
     )
+
 
     uploaded_file = st.file_uploader(
         "Upload a PDF",
         type=["pdf"],
         help=(
-            "Upload a PDF to temporarily query "
-            "that document."
+            "Upload a PDF to temporarily "
+            "use it as the knowledge source."
         )
     )
 
@@ -735,14 +589,12 @@ with st.sidebar:
 
         pdf_bytes = uploaded_file.getvalue()
 
+
+        # Create hash so same PDF is not processed repeatedly
         file_hash = hashlib.md5(
             pdf_bytes
         ).hexdigest()
 
-
-        # ----------------------------------------------------
-        # Process only NEW PDF
-        # ----------------------------------------------------
 
         if (
             st.session_state.uploaded_file_hash
@@ -764,148 +616,149 @@ with st.sidebar:
                     )
 
 
-                    # ----------------------------------------
-                    # Store ONLY in session state
-                    # ----------------------------------------
+                    # --------------------------------------------
+                    # Store uploaded KB ONLY in session state
+                    # --------------------------------------------
 
                     st.session_state.uploaded_index = (
                         uploaded_index
                     )
 
+
                     st.session_state.uploaded_metadata = (
                         uploaded_metadata
                     )
+
 
                     st.session_state.uploaded_file_hash = (
                         file_hash
                     )
 
-                    st.session_state.uploaded_filename = (
+
+                    st.session_state.uploaded_pdf = (
                         uploaded_file.name
                     )
 
 
-                    # ----------------------------------------
-                    # Fresh conversation
-                    # ----------------------------------------
-
+                    # Fresh chat for new document
                     st.session_state.messages = []
 
 
                     st.success(
-                        f"✅ {uploaded_file.name} processed"
+                        f"✅ {uploaded_file.name} is ready!"
                     )
 
 
                 except Exception as e:
 
                     st.error(
-                        "PDF processing failed."
+                        "❌ PDF processing failed."
                     )
 
-                    print(
-                        f"PDF processing error: {e}"
+                    st.code(
+                        str(e)
                     )
 
-        else:
 
-            st.success(
-                f"Using: "
-                f"{st.session_state.uploaded_filename}"
-            )
+    # ========================================================
+    # CLEAR UPLOADED PDF
+    # ========================================================
 
-
-    # --------------------------------------------------------
-    # KNOWLEDGE SOURCE
-    # --------------------------------------------------------
-
-    st.divider()
-
-    st.subheader(
-        "🧠 Knowledge Source"
-    )
-
-
-    if (
-        st.session_state.uploaded_index
-        is not None
-    ):
-
-        st.info(
-            "📄 Uploaded PDF\n\n"
-            f"**{st.session_state.uploaded_filename}**"
-        )
-
-        st.caption(
-            "Nova AI is currently answering "
-            "ONLY from this uploaded PDF."
-        )
-
+    if st.session_state.uploaded_pdf:
 
         if st.button(
-            "↩️ Use Knowledge Base",
+            "🔄 Return to Default Knowledge",
             use_container_width=True
         ):
+
+            st.session_state.uploaded_pdf = None
+
+            st.session_state.uploaded_file_hash = None
 
             st.session_state.uploaded_index = None
 
             st.session_state.uploaded_metadata = []
-
-            st.session_state.uploaded_file_hash = None
-
-            st.session_state.uploaded_filename = None
 
             st.session_state.messages = []
 
             st.rerun()
 
 
+    st.divider()
+
+
+    # ========================================================
+    # CURRENT KNOWLEDGE SOURCE
+    # ========================================================
+
+    st.subheader(
+        "📚 Current Knowledge"
+    )
+
+
+    if st.session_state.uploaded_pdf:
+
+        st.success(
+            f"📄 {st.session_state.uploaded_pdf}"
+        )
+
+        st.caption(
+            "Nova AI is currently answering "
+            "from your uploaded PDF."
+        )
+
     else:
 
-        if (
-            knowledge_index is not None
-            and knowledge_index.ntotal > 0
-        ):
+        st.info(
+            "📚 Using default knowledge base."
+        )
 
-            st.success(
-                "🧠 Default Knowledge Base active"
-            )
+        for pdf in DEFAULT_PDFS:
 
-            st.caption(
-                f"{knowledge_index.ntotal} indexed chunks"
-            )
+            if os.path.exists(pdf):
 
-        else:
+                st.caption(
+                    f"📄 {os.path.basename(pdf)}"
+                )
 
-            st.warning(
-                "⚠️ Default Knowledge Base not found."
-            )
-
-
-    # --------------------------------------------------------
-    # MODEL
-    # --------------------------------------------------------
 
     st.divider()
 
+
+    # ========================================================
+    # MODEL
+    # ========================================================
+
     st.subheader(
-        "⚙️ Configuration"
+        "🧠 AI Model"
     )
 
-    st.selectbox(
-        "Model",
-        [GEMINI_MODEL],
-        index=0
-    )
 
     st.caption(
-        "Powered by Gemini + FAISS + "
-        "Sentence Transformers"
+        GEMINI_MODEL
     )
+
+
+    # ========================================================
+    # INDEX STATS
+    # ========================================================
+
+    (
+        active_index,
+        active_metadata,
+        active_type
+    ) = get_active_knowledge_base()
+
+
+    if active_index is not None:
+
+        st.caption(
+            f"Indexed chunks: {active_index.ntotal}"
+        )
 
 
 # ============================================================
-# 14. MAIN APPLICATION
+# MAIN HEADER
 # ============================================================
 
 st.title(
@@ -913,32 +766,28 @@ st.title(
 )
 
 st.caption(
-    "Ask questions about your documents using "
-    "Retrieval-Augmented Generation"
+    "Ask questions using Retrieval-Augmented Generation"
 )
 
 
 # ============================================================
-# 15. WELCOME SCREEN
+# WELCOME MESSAGE
 # ============================================================
 
 if len(
     st.session_state.messages
 ) == 0:
 
-    if (
-        st.session_state.uploaded_index
-        is not None
-    ):
+    if st.session_state.uploaded_pdf:
 
         st.markdown(
             f"""
-### 📄 Document loaded
+### 👋 Document loaded
 
-**{st.session_state.uploaded_filename}**
+**📄 {st.session_state.uploaded_pdf}**
 
-Nova AI is currently using this PDF as its
-knowledge source.
+Nova AI is currently using this PDF
+as its knowledge source.
 
 Ask me anything about this document.
 """
@@ -955,19 +804,17 @@ I'm **Nova AI**.
 You can either:
 
 - 📚 Ask questions using the existing knowledge base
-- 📄 Upload a PDF and ask questions specifically
-  about that document
+- 📄 Upload a PDF and ask questions specifically about that document
 
-When you upload a PDF, Nova AI temporarily switches
-to that document.
+When you upload a PDF, Nova AI temporarily switches to that document.
 
-Your default knowledge base is NOT replaced.
+Your default knowledge base is **NOT replaced**.
 """
         )
 
 
 # ============================================================
-# 16. DISPLAY CHAT HISTORY
+# DISPLAY CHAT HISTORY
 # ============================================================
 
 for message in st.session_state.messages:
@@ -981,48 +828,20 @@ for message in st.session_state.messages:
         )
 
 
-        # ----------------------------------------------------
-        # Display sources
-        # ----------------------------------------------------
-
-        if (
-            message["role"] == "assistant"
-            and message.get("sources")
-        ):
-
-            with st.expander(
-                "📄 Sources"
-            ):
-
-                for source in message["sources"]:
-
-                    st.markdown(
-                        f"""
-**{source.get("doc_id", "Unknown")}**
-
-Page: **{source.get("page", "Unknown")}**
-
-Similarity: **{float(source.get("similarity_score", 0)):.4f}**
-
-{source.get("text", "")[:400]}...
-"""
-                    )
-
-
 # ============================================================
-# 17. CHAT INPUT
+# CHAT INPUT
 # ============================================================
 
-query = st.chat_input(
-    "Message Nova AI..."
+user_query = st.chat_input(
+    "Ask Nova AI..."
 )
 
 
 # ============================================================
-# 18. PROCESS QUERY
+# PROCESS USER QUESTION
 # ============================================================
 
-if query:
+if user_query:
 
     # --------------------------------------------------------
     # Save user message
@@ -1031,7 +850,7 @@ if query:
     st.session_state.messages.append(
         {
             "role": "user",
-            "content": query
+            "content": user_query
         }
     )
 
@@ -1041,124 +860,341 @@ if query:
     ):
 
         st.markdown(
-            query
+            user_query
         )
 
 
     # --------------------------------------------------------
-    # SELECT KNOWLEDGE SOURCE
-    # --------------------------------------------------------
-
-    if (
-        st.session_state.uploaded_index
-        is not None
-    ):
-
-        active_index = (
-            st.session_state.uploaded_index
-        )
-
-        active_metadata = (
-            st.session_state.uploaded_metadata
-        )
-
-        source_mode = (
-            "Uploaded PDF: "
-            f"{st.session_state.uploaded_filename}"
-        )
-
-    else:
-
-        active_index = knowledge_index
-
-        active_metadata = knowledge_metadata
-
-        source_mode = (
-            "Default Knowledge Base"
-        )
-
-
-    # --------------------------------------------------------
-    # RETRIEVE
+    # Retrieve relevant documents
     # --------------------------------------------------------
 
     with st.spinner(
-        "Searching knowledge..."
+        "🔎 Searching knowledge base..."
     ):
 
         contexts = retrieve(
-            query,
-            active_index,
-            active_metadata,
-            TOP_K
+            user_query
         )
 
 
     # --------------------------------------------------------
-    # GENERATE ANSWER
+    # NO CONTEXT
     # --------------------------------------------------------
 
-    with st.chat_message(
-        "assistant"
-    ):
+    if not contexts:
 
-        with st.spinner(
-            "Generating answer..."
+        answer = (
+            "I couldn't find relevant information "
+            "in the current knowledge source."
+        )
+
+
+        with st.chat_message(
+            "assistant"
         ):
 
-            answer = generate_answer(
-                query=query,
-                contexts=contexts,
-                conversation_history=(
-                    st.session_state.messages
-                )
+            st.warning(
+                answer
             )
 
 
-        st.markdown(
-            answer
+    else:
+
+        # ----------------------------------------------------
+        # Build RAG context
+        # ----------------------------------------------------
+
+        context_parts = []
+
+
+        for i, chunk in enumerate(
+            contexts,
+            start=1
+        ):
+
+            context_parts.append(
+                f"""
+[Source {i}]
+
+Document:
+{chunk.get("doc_id", "Unknown")}
+
+Page:
+{chunk.get("page", "Unknown")}
+
+Content:
+{chunk.get("text", "")}
+"""
+            )
+
+
+        context_text = "\n".join(
+            context_parts
         )
 
 
         # ----------------------------------------------------
-        # SOURCES
+        # Determine source
         # ----------------------------------------------------
 
-        if contexts:
+        if st.session_state.uploaded_pdf:
 
-            with st.expander(
-                f"📄 Sources — {source_mode}"
-            ):
-
-                for context in contexts:
-
-                    st.markdown(
-                        f"""
-**{context.get("doc_id", "Unknown")}**
-
-Page: **{context.get("page", "Unknown")}**
-
-Similarity: **{float(context.get("similarity_score", 0)):.4f}**
-
-{context.get("text", "")[:400]}...
-"""
-                    )
+            source_instruction = (
+                "The user uploaded a PDF. "
+                "Answer using the retrieved content "
+                "from that uploaded PDF."
+            )
 
         else:
 
-            st.warning(
-                "No relevant document chunks were retrieved."
+            source_instruction = (
+                "No PDF was uploaded. "
+                "Answer using the retrieved content "
+                "from the default knowledge base."
             )
 
 
+        # ----------------------------------------------------
+        # Gemini prompt
+        # ----------------------------------------------------
+
+        prompt_for_llm = f"""
+You are Nova AI, a reliable Retrieval-Augmented
+Generation knowledge assistant.
+
+{source_instruction}
+
+Your task is to answer the user's question using
+the retrieved document context below.
+
+IMPORTANT RULES:
+
+1. Ground your answer in the retrieved context.
+2. Do not invent facts that contradict the context.
+3. If the retrieved context contains the answer,
+   explain it clearly and completely.
+4. If the context does not contain enough information,
+   explicitly say that the retrieved documents do not
+   contain enough information.
+5. You may use your general knowledge ONLY when the
+   question is a basic/general question and the retrieved
+   documents clearly do not contain the answer.
+6. When using information from the documents, mention
+   the relevant source document/page when useful.
+7. Do not claim that something is present in a document
+   when it is not.
+8. Give a useful, natural answer rather than simply
+   repeating the retrieved text.
+9. Use bullet points or sections when they improve clarity.
+
+==============================
+RETRIEVED DOCUMENT CONTEXT
+==============================
+
+{context_text}
+
+==============================
+USER QUESTION
+==============================
+
+{user_query}
+
+==============================
+ANSWER
+==============================
+"""
+
+
+        # ----------------------------------------------------
+        # Generate Gemini response
+        # ----------------------------------------------------
+
+        with st.chat_message(
+            "assistant"
+        ):
+
+            with st.spinner(
+                "🧠 Thinking..."
+            ):
+
+                try:
+
+                    response = model.generate_content(
+                        prompt_for_llm
+                    )
+
+
+                    if (
+                        response
+                        and response.text
+                    ):
+
+                        answer = (
+                            response.text.strip()
+                        )
+
+                    else:
+
+                        answer = (
+                            "Gemini returned an empty response."
+                        )
+
+
+                except Exception as e:
+
+                    # ====================================================
+                    # IMPORTANT DEBUGGING SECTION
+                    # ====================================================
+
+                    error_message = str(e)
+
+                    print(
+                        f"Gemini generation error: {error_message}"
+                    )
+
+
+                    # --------------------------------------------
+                    # Quota / rate limit
+                    # --------------------------------------------
+
+                    if (
+                        "429" in error_message
+                        or "quota" in error_message.lower()
+                        or "resource exhausted" in error_message.lower()
+                    ):
+
+                        answer = (
+                            "⚠️ **Gemini quota/rate limit reached.**\n\n"
+                            "Your RAG retrieval is working, but Gemini "
+                            "cannot generate the answer right now.\n\n"
+                            "Please wait for the quota to reset or use "
+                            "another available Gemini API key/project."
+                        )
+
+
+                    # --------------------------------------------
+                    # Authentication
+                    # --------------------------------------------
+
+                    elif (
+                        "401" in error_message
+                        or "403" in error_message
+                        or "authentication" in error_message.lower()
+                        or "api key" in error_message.lower()
+                        or "permission" in error_message.lower()
+                    ):
+
+                        answer = (
+                            "⚠️ **Gemini authentication failed.**\n\n"
+                            "Please verify that the correct "
+                            "`GEMINI_API_KEY` is configured in "
+                            "Streamlit Secrets."
+                        )
+
+
+                    # --------------------------------------------
+                    # Model error
+                    # --------------------------------------------
+
+                    elif (
+                        "model" in error_message.lower()
+                        and (
+                            "not found" in error_message.lower()
+                            or "invalid" in error_message.lower()
+                        )
+                    ):
+
+                        answer = (
+                            "⚠️ **Gemini model configuration error.**\n\n"
+                            f"Configured model: `{GEMINI_MODEL}`"
+                        )
+
+
+                    # --------------------------------------------
+                    # Other errors
+                    # --------------------------------------------
+
+                    else:
+
+                        answer = (
+                            "⚠️ **Gemini generation failed.**\n\n"
+                            "The retrieved documents were found "
+                            "successfully, but Gemini returned an "
+                            "unexpected error.\n\n"
+                            f"Technical error:\n`{error_message}`"
+                        )
+
+
+            st.markdown(
+                answer
+            )
+
+
+            # ------------------------------------------------
+            # SOURCES
+            # ------------------------------------------------
+
+            with st.expander(
+                "📚 Sources used"
+            ):
+
+                for chunk in contexts:
+
+                    doc_name = chunk.get(
+                        "doc_id",
+                        chunk.get(
+                            "document",
+                            "Unknown"
+                        )
+                    )
+
+
+                    page = chunk.get(
+                        "page",
+                        "Unknown"
+                    )
+
+
+                    similarity = float(
+                        chunk.get(
+                            "similarity",
+                            chunk.get(
+                                "similarity_score",
+                                0.0
+                            )
+                        )
+                    )
+
+
+                    text = chunk.get(
+                        "text",
+                        chunk.get(
+                            "content",
+                            ""
+                        )
+                    )
+
+
+                    st.markdown(
+                        f"""
+**{doc_name}**
+
+Page: **{page}**
+
+Similarity: **{similarity:.3f}**
+
+{text[:700]}...
+"""
+                    )
+
+
     # --------------------------------------------------------
-    # SAVE ASSISTANT MESSAGE
+    # Save assistant response
     # --------------------------------------------------------
 
     st.session_state.messages.append(
         {
             "role": "assistant",
-            "content": answer,
-            "sources": contexts
+            "content": answer
         }
     )
