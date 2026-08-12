@@ -1,6 +1,7 @@
 import os
 import pickle
 import hashlib
+from io import BytesIO
 
 import faiss
 import numpy as np
@@ -32,7 +33,7 @@ load_dotenv()
 
 def get_secret(name, default=None):
     """
-    Get configuration from Streamlit Secrets first.
+    Read configuration from Streamlit Secrets first.
     Fall back to .env for local development.
     """
 
@@ -46,6 +47,7 @@ def get_secret(name, default=None):
 
 
 GEMINI_API_KEY = get_secret("GEMINI_API_KEY")
+
 GEMINI_MODEL = get_secret(
     "GEMINI_MODEL",
     "gemini-2.5-flash"
@@ -57,16 +59,35 @@ GEMINI_MODEL = get_secret(
 # ============================================================
 
 if not GEMINI_API_KEY:
+
     st.error(
-        "Gemini API key is not configured. "
-        "Add GEMINI_API_KEY to Streamlit Secrets."
+        "⚠️ Gemini API key is not configured.\n\n"
+        "Please add GEMINI_API_KEY to Streamlit Secrets."
     )
+
     st.stop()
 
 
-genai.configure(api_key=GEMINI_API_KEY)
+try:
 
-model = genai.GenerativeModel(GEMINI_MODEL)
+    genai.configure(
+        api_key=GEMINI_API_KEY
+    )
+
+    model = genai.GenerativeModel(
+        GEMINI_MODEL
+    )
+
+except Exception as e:
+
+    st.error(
+        "⚠️ Gemini initialization failed.\n\n"
+        "Please verify your Gemini API key and model configuration."
+    )
+
+    print(f"Gemini initialization error: {e}")
+
+    st.stop()
 
 
 # ============================================================
@@ -91,34 +112,56 @@ CHUNK_OVERLAP = 50
 @st.cache_resource
 def load_embedder():
 
-    return SentenceTransformer(EMBED_MODEL)
+    return SentenceTransformer(
+        EMBED_MODEL
+    )
 
 
 embedder = load_embedder()
 
 
 # ============================================================
-# 6. LOAD EXISTING KNOWLEDGE BASE
+# 6. LOAD DEFAULT KNOWLEDGE BASE
 # ============================================================
 
 @st.cache_resource
 def load_knowledge_base():
 
     if not os.path.exists(INDEX_PATH):
+
         return None, []
 
     if not os.path.exists(META_PATH):
+
         return None, []
 
-    index = faiss.read_index(INDEX_PATH)
+    try:
 
-    with open(META_PATH, "rb") as f:
-        metadata = pickle.load(f)
+        index = faiss.read_index(
+            INDEX_PATH
+        )
 
-    return index, metadata
+        with open(
+            META_PATH,
+            "rb"
+        ) as f:
+
+            metadata = pickle.load(f)
+
+        return index, metadata
+
+    except Exception as e:
+
+        print(
+            f"Knowledge base loading error: {e}"
+        )
+
+        return None, []
 
 
-knowledge_index, knowledge_metadata = load_knowledge_base()
+knowledge_index, knowledge_metadata = (
+    load_knowledge_base()
+)
 
 
 # ============================================================
@@ -127,18 +170,23 @@ knowledge_index, knowledge_metadata = load_knowledge_base()
 
 def extract_pdf_pages(pdf_bytes):
 
-    from io import BytesIO
-
-    reader = PdfReader(BytesIO(pdf_bytes))
+    reader = PdfReader(
+        BytesIO(pdf_bytes)
+    )
 
     pages = []
 
-    for page_number, page in enumerate(reader.pages, start=1):
+    for page_number, page in enumerate(
+        reader.pages,
+        start=1
+    ):
 
         try:
+
             text = page.extract_text() or ""
 
         except Exception:
+
             text = ""
 
         if text.strip():
@@ -167,6 +215,8 @@ def chunk_text(
 
     start = 0
 
+    step = chunk_size - overlap
+
     while start < len(text):
 
         end = min(
@@ -177,9 +227,12 @@ def chunk_text(
         chunk = text[start:end].strip()
 
         if chunk:
-            chunks.append(chunk)
 
-        start += chunk_size - overlap
+            chunks.append(
+                chunk
+            )
+
+        start += step
 
     return chunks
 
@@ -188,9 +241,14 @@ def chunk_text(
 # 9. PROCESS USER-UPLOADED PDF
 # ============================================================
 
-def process_uploaded_pdf(pdf_bytes, filename):
+def process_uploaded_pdf(
+    pdf_bytes,
+    filename
+):
 
-    pages = extract_pdf_pages(pdf_bytes)
+    pages = extract_pdf_pages(
+        pdf_bytes
+    )
 
     if not pages:
 
@@ -199,18 +257,24 @@ def process_uploaded_pdf(pdf_bytes, filename):
         )
 
     all_chunks = []
+
     metadata = []
 
     for page_data in pages:
 
         page_number = page_data["page"]
+
         text = page_data["text"]
 
-        chunks = chunk_text(text)
+        chunks = chunk_text(
+            text
+        )
 
-        for chunk_index, chunk in enumerate(chunks):
+        for chunk in chunks:
 
-            all_chunks.append(chunk)
+            all_chunks.append(
+                chunk
+            )
 
             metadata.append(
                 {
@@ -227,16 +291,24 @@ def process_uploaded_pdf(pdf_bytes, filename):
             "No readable text was found in the uploaded PDF."
         )
 
+    # --------------------------------------------------------
     # Generate embeddings
+    # --------------------------------------------------------
+
     embeddings = embedder.encode(
         all_chunks,
         convert_to_numpy=True,
         show_progress_bar=False
     )
 
-    embeddings = embeddings.astype("float32")
+    embeddings = embeddings.astype(
+        "float32"
+    )
 
-    # Normalize embeddings for cosine similarity
+    # --------------------------------------------------------
+    # Normalize for cosine similarity
+    # --------------------------------------------------------
+
     embeddings = embeddings / (
         np.linalg.norm(
             embeddings,
@@ -248,12 +320,22 @@ def process_uploaded_pdf(pdf_bytes, filename):
 
     dimension = embeddings.shape[1]
 
-    # Create a NEW index only for this uploaded PDF
-    uploaded_index = faiss.IndexFlatIP(dimension)
+    # --------------------------------------------------------
+    # Create temporary uploaded-document index
+    # --------------------------------------------------------
 
-    uploaded_index.add(embeddings)
+    uploaded_index = faiss.IndexFlatIP(
+        dimension
+    )
 
-    return uploaded_index, metadata
+    uploaded_index.add(
+        embeddings
+    )
+
+    return (
+        uploaded_index,
+        metadata
+    )
 
 
 # ============================================================
@@ -267,11 +349,22 @@ def retrieve(
     top_k=TOP_K
 ):
 
-    if index is None or not metadata:
+    if index is None:
 
         return []
 
-    # Embed user query
+    if not metadata:
+
+        return []
+
+    if index.ntotal == 0:
+
+        return []
+
+    # --------------------------------------------------------
+    # Query embedding
+    # --------------------------------------------------------
+
     query_embedding = embedder.encode(
         [query],
         convert_to_numpy=True,
@@ -282,7 +375,10 @@ def retrieve(
         "float32"
     )
 
-    # Normalize query vector
+    # --------------------------------------------------------
+    # Normalize
+    # --------------------------------------------------------
+
     query_embedding = query_embedding / (
         np.linalg.norm(
             query_embedding,
@@ -292,6 +388,10 @@ def retrieve(
         + 1e-9
     )
 
+    # --------------------------------------------------------
+    # Search
+    # --------------------------------------------------------
+
     k = min(
         top_k,
         index.ntotal,
@@ -299,6 +399,7 @@ def retrieve(
     )
 
     if k <= 0:
+
         return []
 
     distances, indices = index.search(
@@ -314,18 +415,24 @@ def retrieve(
     ):
 
         if index_position < 0:
+
             continue
 
         if index_position >= len(metadata):
+
             continue
 
-        item = metadata[index_position].copy()
+        item = metadata[
+            index_position
+        ].copy()
 
-        item["similarity_score"] = float(
-            distance
+        item[
+            "similarity_score"
+        ] = float(distance)
+
+        results.append(
+            item
         )
-
-        results.append(item)
 
     return results
 
@@ -340,28 +447,52 @@ def generate_answer(
     conversation_history
 ):
 
+    # --------------------------------------------------------
+    # No retrieved information
+    # --------------------------------------------------------
+
     if not contexts:
 
         return (
             "I couldn't find relevant information "
-            "in the available knowledge base."
+            "in the current knowledge source."
         )
+
+
+    # --------------------------------------------------------
+    # Build context
+    # --------------------------------------------------------
 
     context_parts = []
 
-    for i, context in enumerate(contexts, start=1):
+    for i, context in enumerate(
+        contexts,
+        start=1
+    ):
 
         context_parts.append(
             f"""
 [Source {i}]
-Document: {context.get("doc_id", "Unknown")}
-Page: {context.get("page", "Unknown")}
 
+Document:
+{context.get("doc_id", "Unknown")}
+
+Page:
+{context.get("page", "Unknown")}
+
+Content:
 {context.get("text", "")}
 """
         )
 
-    context_text = "\n".join(context_parts)
+    context_text = "\n".join(
+        context_parts
+    )
+
+
+    # --------------------------------------------------------
+    # Conversation history
+    # --------------------------------------------------------
 
     history_text = ""
 
@@ -376,43 +507,147 @@ Page: {context.get("page", "Unknown")}
                 f'{message["content"]}'
             )
 
-        history_text = "\n".join(history_parts)
+        history_text = "\n".join(
+            history_parts
+        )
+
+
+    # --------------------------------------------------------
+    # Prompt
+    # --------------------------------------------------------
 
     prompt = f"""
-You are Nova AI, a document-grounded AI assistant.
+You are Nova AI, a reliable Retrieval-Augmented Generation
+assistant.
 
-Your task is to answer the user's question using the
-provided retrieved context.
+Your job is to answer the user's question using the
+retrieved document context provided below.
 
 IMPORTANT RULES:
 
 1. Use the retrieved context as the primary source of truth.
-2. Do not invent facts that are not supported by the context.
-3. If the answer cannot be found in the context, clearly say
-   that the information is not available in the provided documents.
-4. Give a direct and useful answer.
-5. When appropriate, explain the answer in a structured way.
-6. Do not mention internal implementation details unless the
-   user asks about them.
 
-CONVERSATION HISTORY:
+2. Do NOT invent facts that are not supported by the
+   retrieved context.
+
+3. If the retrieved context does not contain enough
+   information to answer the question, clearly say that
+   the information was not found in the current knowledge
+   source.
+
+4. Give a clear, direct and useful answer.
+
+5. Explain concepts in simple language when appropriate.
+
+6. Use bullet points or sections when they improve clarity.
+
+7. Do not mention internal implementation details unless
+   the user asks about them.
+
+8. If the user asks a question about an uploaded document,
+   stay focused on that uploaded document.
+
+9. Do not mix information from another document or
+   knowledge source.
+
+10. Never pretend that information exists in the document
+    when it does not.
+
+==============================
+CONVERSATION HISTORY
+==============================
 
 {history_text}
 
-RETRIEVED DOCUMENT CONTEXT:
+==============================
+RETRIEVED DOCUMENT CONTEXT
+==============================
 
 {context_text}
 
-USER QUESTION:
+==============================
+USER QUESTION
+==============================
 
 {query}
 
-ANSWER:
+==============================
+ANSWER
+==============================
 """
 
-    response = model.generate_content(prompt)
+    # --------------------------------------------------------
+    # Gemini generation
+    # --------------------------------------------------------
 
-    return response.text
+    try:
+
+        response = model.generate_content(
+            prompt
+        )
+
+        if response and response.text:
+
+            return response.text.strip()
+
+        return (
+            "I couldn't generate an answer from "
+            "the retrieved information."
+        )
+
+    except Exception as e:
+
+        error_message = str(e).lower()
+
+        # ----------------------------------------------------
+        # QUOTA / RATE LIMIT
+        # ----------------------------------------------------
+
+        if (
+            "429" in error_message
+            or "quota" in error_message
+            or "rate limit" in error_message
+            or "resource exhausted" in error_message
+        ):
+
+            return (
+                "⚠️ **Gemini free-tier limit reached.**\n\n"
+                "Nova AI successfully searched the document, "
+                "but Gemini is temporarily unavailable because "
+                "the current free-tier generation quota has "
+                "been reached.\n\n"
+                "Please try again after the quota resets."
+            )
+
+        # ----------------------------------------------------
+        # API KEY / AUTHENTICATION
+        # ----------------------------------------------------
+
+        if (
+            "api key" in error_message
+            or "authentication" in error_message
+            or "permission" in error_message
+            or "403" in error_message
+        ):
+
+            return (
+                "⚠️ **Gemini authentication failed.**\n\n"
+                "Please verify the Gemini API key configured "
+                "in Streamlit Secrets."
+            )
+
+        # ----------------------------------------------------
+        # GENERIC ERROR
+        # ----------------------------------------------------
+
+        print(
+            f"Gemini generation error: {e}"
+        )
+
+        return (
+            "⚠️ I encountered a temporary error while "
+            "generating the answer. Please try again."
+        )
 
 
 # ============================================================
@@ -450,13 +685,16 @@ if "uploaded_filename" not in st.session_state:
 
 with st.sidebar:
 
-    st.title("🤖 Nova AI")
+    st.title(
+        "🤖 Nova AI"
+    )
 
     st.caption(
         "Enterprise RAG Knowledge Assistant"
     )
 
     st.divider()
+
 
     # --------------------------------------------------------
     # NEW CHAT
@@ -471,13 +709,17 @@ with st.sidebar:
 
         st.rerun()
 
+
     st.divider()
 
+
     # --------------------------------------------------------
-    # DOCUMENT UPLOAD
+    # PDF UPLOAD
     # --------------------------------------------------------
 
-    st.subheader("📄 Documents")
+    st.subheader(
+        "📄 Documents"
+    )
 
     uploaded_file = st.file_uploader(
         "Upload a PDF",
@@ -488,6 +730,7 @@ with st.sidebar:
         )
     )
 
+
     if uploaded_file is not None:
 
         pdf_bytes = uploaded_file.getvalue()
@@ -496,7 +739,11 @@ with st.sidebar:
             pdf_bytes
         ).hexdigest()
 
-        # Process only if this is a NEW upload
+
+        # ----------------------------------------------------
+        # Process only NEW PDF
+        # ----------------------------------------------------
+
         if (
             st.session_state.uploaded_file_hash
             != file_hash
@@ -516,6 +763,11 @@ with st.sidebar:
                         uploaded_file.name
                     )
 
+
+                    # ----------------------------------------
+                    # Store ONLY in session state
+                    # ----------------------------------------
+
                     st.session_state.uploaded_index = (
                         uploaded_index
                     )
@@ -532,18 +784,27 @@ with st.sidebar:
                         uploaded_file.name
                     )
 
-                    # Start a fresh conversation for
-                    # the newly uploaded document
+
+                    # ----------------------------------------
+                    # Fresh conversation
+                    # ----------------------------------------
+
                     st.session_state.messages = []
+
 
                     st.success(
                         f"✅ {uploaded_file.name} processed"
                     )
 
+
                 except Exception as e:
 
                     st.error(
-                        f"PDF processing failed: {str(e)}"
+                        "PDF processing failed."
+                    )
+
+                    print(
+                        f"PDF processing error: {e}"
                     )
 
         else:
@@ -553,15 +814,22 @@ with st.sidebar:
                 f"{st.session_state.uploaded_filename}"
             )
 
+
     # --------------------------------------------------------
-    # KNOWLEDGE BASE STATUS
+    # KNOWLEDGE SOURCE
     # --------------------------------------------------------
 
     st.divider()
 
-    st.subheader("🧠 Knowledge Source")
+    st.subheader(
+        "🧠 Knowledge Source"
+    )
 
-    if st.session_state.uploaded_index is not None:
+
+    if (
+        st.session_state.uploaded_index
+        is not None
+    ):
 
         st.info(
             "📄 Uploaded PDF\n\n"
@@ -569,9 +837,10 @@ with st.sidebar:
         )
 
         st.caption(
-            "Queries are currently restricted to "
-            "the uploaded PDF."
+            "Nova AI is currently answering "
+            "ONLY from this uploaded PDF."
         )
+
 
         if st.button(
             "↩️ Use Knowledge Base",
@@ -579,16 +848,24 @@ with st.sidebar:
         ):
 
             st.session_state.uploaded_index = None
+
             st.session_state.uploaded_metadata = []
+
             st.session_state.uploaded_file_hash = None
+
             st.session_state.uploaded_filename = None
+
             st.session_state.messages = []
 
             st.rerun()
 
+
     else:
 
-        if knowledge_index is not None:
+        if (
+            knowledge_index is not None
+            and knowledge_index.ntotal > 0
+        ):
 
             st.success(
                 "🧠 Default Knowledge Base active"
@@ -601,8 +878,9 @@ with st.sidebar:
         else:
 
             st.warning(
-                "Knowledge Base not found."
+                "⚠️ Default Knowledge Base not found."
             )
+
 
     # --------------------------------------------------------
     # MODEL
@@ -610,7 +888,9 @@ with st.sidebar:
 
     st.divider()
 
-    st.subheader("⚙️ Configuration")
+    st.subheader(
+        "⚙️ Configuration"
+    )
 
     st.selectbox(
         "Model",
@@ -628,7 +908,9 @@ with st.sidebar:
 # 14. MAIN APPLICATION
 # ============================================================
 
-st.title("🤖 Nova AI")
+st.title(
+    "🤖 Nova AI"
+)
 
 st.caption(
     "Ask questions about your documents using "
@@ -640,15 +922,23 @@ st.caption(
 # 15. WELCOME SCREEN
 # ============================================================
 
-if len(st.session_state.messages) == 0:
+if len(
+    st.session_state.messages
+) == 0:
 
-    if st.session_state.uploaded_index is not None:
+    if (
+        st.session_state.uploaded_index
+        is not None
+    ):
 
         st.markdown(
             f"""
 ### 📄 Document loaded
 
 **{st.session_state.uploaded_filename}**
+
+Nova AI is currently using this PDF as its
+knowledge source.
 
 Ask me anything about this document.
 """
@@ -660,15 +950,18 @@ Ask me anything about this document.
             """
 ### 👋 Hello!
 
-I'm Nova AI.
+I'm **Nova AI**.
 
 You can either:
 
-- 📚 Ask questions about the existing knowledge base
-- 📄 Upload a PDF and ask questions specifically about it
+- 📚 Ask questions using the existing knowledge base
+- 📄 Upload a PDF and ask questions specifically
+  about that document
 
-Upload a PDF from the sidebar to switch to
-document-specific RAG.
+When you upload a PDF, Nova AI temporarily switches
+to that document.
+
+Your default knowledge base is NOT replaced.
 """
         )
 
@@ -687,7 +980,11 @@ for message in st.session_state.messages:
             message["content"]
         )
 
-        # Display sources saved with assistant message
+
+        # ----------------------------------------------------
+        # Display sources
+        # ----------------------------------------------------
+
         if (
             message["role"] == "assistant"
             and message.get("sources")
@@ -705,7 +1002,7 @@ for message in st.session_state.messages:
 
 Page: **{source.get("page", "Unknown")}**
 
-Similarity: **{source.get("similarity_score", 0):.4f}**
+Similarity: **{float(source.get("similarity_score", 0)):.4f}**
 
 {source.get("text", "")[:400]}...
 """
@@ -721,10 +1018,14 @@ query = st.chat_input(
 )
 
 
+# ============================================================
+# 18. PROCESS QUERY
+# ============================================================
+
 if query:
 
     # --------------------------------------------------------
-    # USER MESSAGE
+    # Save user message
     # --------------------------------------------------------
 
     st.session_state.messages.append(
@@ -734,9 +1035,15 @@ if query:
         }
     )
 
-    with st.chat_message("user"):
 
-        st.markdown(query)
+    with st.chat_message(
+        "user"
+    ):
+
+        st.markdown(
+            query
+        )
+
 
     # --------------------------------------------------------
     # SELECT KNOWLEDGE SOURCE
@@ -756,57 +1063,62 @@ if query:
         )
 
         source_mode = (
-            f"Uploaded PDF: "
+            "Uploaded PDF: "
             f"{st.session_state.uploaded_filename}"
         )
 
     else:
 
         active_index = knowledge_index
+
         active_metadata = knowledge_metadata
 
-        source_mode = "Default Knowledge Base"
+        source_mode = (
+            "Default Knowledge Base"
+        )
+
 
     # --------------------------------------------------------
     # RETRIEVE
     # --------------------------------------------------------
 
-    contexts = retrieve(
-        query,
-        active_index,
-        active_metadata,
-        TOP_K
-    )
+    with st.spinner(
+        "Searching knowledge..."
+    ):
+
+        contexts = retrieve(
+            query,
+            active_index,
+            active_metadata,
+            TOP_K
+        )
+
 
     # --------------------------------------------------------
     # GENERATE ANSWER
     # --------------------------------------------------------
 
-    with st.chat_message("assistant"):
+    with st.chat_message(
+        "assistant"
+    ):
 
         with st.spinner(
-            "Searching documents and generating answer..."
+            "Generating answer..."
         ):
 
-            try:
-
-                answer = generate_answer(
-                    query=query,
-                    contexts=contexts,
-                    conversation_history=(
-                        st.session_state.messages
-                    )
+            answer = generate_answer(
+                query=query,
+                contexts=contexts,
+                conversation_history=(
+                    st.session_state.messages
                 )
+            )
 
-            except Exception as e:
 
-                answer = (
-                    "⚠️ I encountered an error "
-                    f"while generating the answer:\n\n"
-                    f"`{str(e)}`"
-                )
+        st.markdown(
+            answer
+        )
 
-        st.markdown(answer)
 
         # ----------------------------------------------------
         # SOURCES
@@ -826,7 +1138,7 @@ if query:
 
 Page: **{context.get("page", "Unknown")}**
 
-Similarity: **{context.get("similarity_score", 0):.4f}**
+Similarity: **{float(context.get("similarity_score", 0)):.4f}**
 
 {context.get("text", "")[:400]}...
 """
@@ -837,6 +1149,7 @@ Similarity: **{context.get("similarity_score", 0):.4f}**
             st.warning(
                 "No relevant document chunks were retrieved."
             )
+
 
     # --------------------------------------------------------
     # SAVE ASSISTANT MESSAGE
